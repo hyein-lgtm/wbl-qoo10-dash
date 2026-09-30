@@ -54,6 +54,23 @@ class Qoo10:
             tried.append(f"{style}/v{ver}: {res.get('ErrorCode') or res.get('ResultCode')} {res.get('ErrorMsg') or res.get('ResultMsg')}")
         raise Qoo10Error(f"{method} 실패 — " + " | ".join(tried))
 
+    def write(self, method, params):
+        """쓰기(등록·수정)용: 중복 등록을 막기 위해 신형 POST만,
+        '존재하지 않는 API(-90001)'일 때만 다음 버전으로 넘어간다."""
+        last = None
+        for ver in ("1.1", "1.0", "1.2"):
+            res = self._post(method, params, ver)
+            last = res
+            if str(res.get("ErrorCode")) != "-90001":
+                return {"version": ver, **res}
+        return last
+
+    def detail(self, item_code):
+        return self.call("ItemsLookup.GetItemDetailInfo", {"ItemCode": str(item_code)})
+
+    def delivery_groups(self):
+        return _rows(self.call("ItemsLookup.GetSellerDeliveryGroupInfo"))
+
     # ── 조회 ─────────────────────────────────
     def products(self):
         items, page = [], 1

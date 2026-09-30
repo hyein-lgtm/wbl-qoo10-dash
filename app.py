@@ -10,7 +10,8 @@
 import os, json, sqlite3, random, secrets, threading, time, traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Request
+from pydantic import BaseModel
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from qoo10 import Qoo10
@@ -49,6 +50,8 @@ with db() as c:
     CREATE TABLE IF NOT EXISTS orders(order_no TEXT PRIMARY KEY, pack_no TEXT, item_code TEXT, seller_code TEXT,
         title TEXT, option TEXT, qty INTEGER, amount REAL, order_date TEXT, pay_date TEXT, ship_date TEXT,
         status TEXT, carrier TEXT, tracking TEXT, buyer TEXT, raw TEXT, updated TEXT);
+    CREATE TABLE IF NOT EXISTS registrations(id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, seller_code TEXT,
+        title TEXT, price REAL, ok INTEGER, gd_no TEXT, message TEXT, params TEXT);
     CREATE TABLE IF NOT EXISTS sync_log(id INTEGER PRIMARY KEY AUTOINCREMENT, started TEXT, finished TEXT,
         ok INTEGER, products INTEGER, orders INTEGER, message TEXT);
     """)
@@ -281,6 +284,153 @@ def sync_now():
 def sync_log():
     with db() as c:
         return [dict(r) for r in c.execute("SELECT * FROM sync_log ORDER BY id DESC LIMIT 50")]
+
+
+# ── 상품 등록 ───────────────────────────────────────────
+IMG_DIR = Path(DB).parent / "images"
+IMG_DIR.mkdir(exist_ok=True)
+AI_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+AI_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+REQUIRED = ["SecondSubCat", "ItemTitle", "SellerCode", "ContactInfo", "StandardImage",
+            "ItemDescription", "ItemPrice", "ItemQty", "ShippingNo"]
+
+
+def client():
+    if DEMO:
+        raise HTTPException(400, "데모 모드에서는 큐텐 호출을 할 수 없어요 (QOO10_KEY 필요)")
+    return Qoo10(KEY)
+
+
+@app.get("/api/items/{code}/detail", dependencies=[Depends(auth)])
+def item_detail(code: str):
+    if DEMO:
+        return {"demo": True, "ResultObject": {"ItemCode": code, "SecondSubCat": "320001234", "ContactInfo": "info@wisland.co.kr",
+                "ShippingNo": "813346", "ProductionPlaceType": "2", "ProductionPlace": "KR", "AvailableDateType": "0", "AvailableDateValue": "3"}}
+    try:
+        return client().detail(code)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+@app.get("/api/delivery-groups", dependencies=[Depends(auth)])
+def delivery_groups():
+    if DEMO:
+        return [{"ShippingNo": "813346", "ShippingFee": 300, "ShippingType": "F", "transcName": "デモ"}]
+    try:
+        return client().delivery_groups()
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/images", dependencies=[Depends(auth)])
+async def upload_image(request: Request, file: UploadFile = File(...)):
+    ext = (Path(file.filename or "").suffix or ".jpg").lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        raise HTTPException(400, "jpg/png/gif/webp 이미지만 올릴 수 있어요")
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(400, "10MB 이하 이미지만 올릴 수 있어요")
+    name = f"{datetime.now():%Y%m%d%H%M%S}_{secrets.token_hex(4)}{ext}"
+    (IMG_DIR / name).write_bytes(data)
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    base = os.getenv("PUBLIC_BASE_URL") or f"{proto}://{request.headers.get('host', request.url.netloc)}"
+    return {"url": f"{base}/img/{name}"}
+
+
+@app.get("/img/{name}")  # 큐텐이 이미지를 가져갈 수 있게 인증 없이 공개
+def public_image(name: str):
+    f = IMG_DIR / Path(name).name
+    if not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f)
+
+
+class DraftIn(BaseModel):
+    name_ko: str
+    features: str = ""
+    spec: str = ""
+    usage: str = ""
+    keywords: str = ""
+    tone: str = ""
+
+
+DRAFT_SYSTEM = """あなたはQoo10 Japanの化粧品・ジュエリー売場に精通した日本人EC担当者です。
+ブランド: wbL公式 (韓国発のウェルネス・ビューティーブランド、耳つぼジュエリーが主力。クワイエットラグジュアリーの上品なトーン)。
+韓国語の商品情報から、Qoo10出品用の日本語テキストを作ります。
+ルール:
+- 薬機法・景品表示法に抵触する表現は禁止 (痩せる、治る、効く、医療効果、No.1など根拠のない最上級、before/after断定)。
+  「〜をサポート」「気分転換に」「セルフケアのお供に」など控えめな表現にする。
+- ItemTitle は全角50文字以内。検索されやすい語 (耳つぼジュエリー、耳つぼシール 等) を自然に含める。記号の乱用禁止。
+- PromotionName は全角20文字以内の短いキャッチ。
+- ItemDescription はQoo10商品詳細用のシンプルなHTML (h3, p, ul/li, table のみ。style属性は最小限。script禁止)。
+  構成: 導入文 → 特徴(箇条書き) → 商品仕様(表) → 使い方 → ご注意。
+- Keyword は検索キーワードをカンマ区切りで最大10個。
+必ず次のJSONだけを出力: {"ItemTitle":"","PromotionName":"","ItemDescription":"","Keyword":""}"""
+
+
+@app.post("/api/ai/draft", dependencies=[Depends(auth)])
+def ai_draft(d: DraftIn):
+    if not AI_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY 환경변수가 없어서 AI 초안을 만들 수 없어요")
+    user = f"商品名(韓国語): {d.name_ko}\n特徴: {d.features}\n仕様・構成: {d.spec}\n使い方: {d.usage}\n入れたい検索語: {d.keywords}\nトーン要望: {d.tone}"
+    import requests as rq
+    r = rq.post("https://api.anthropic.com/v1/messages", timeout=90,
+                headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": AI_MODEL, "max_tokens": 3000, "system": DRAFT_SYSTEM,
+                      "messages": [{"role": "user", "content": user}]})
+    if r.status_code != 200:
+        raise HTTPException(502, f"AI 호출 실패 {r.status_code}: {r.text[:300]}")
+    text = "".join(b.get("text", "") for b in r.json().get("content", []))
+    try:
+        return json.loads(text[text.index("{"): text.rindex("}") + 1])
+    except ValueError:
+        raise HTTPException(502, "AI 응답을 해석하지 못했어요: " + text[:300])
+
+
+class RegisterIn(BaseModel):
+    params: dict
+    confirm: bool = False
+
+
+@app.post("/api/items/register", dependencies=[Depends(auth)])
+def register_item(body: RegisterIn):
+    p = {k: str(v).strip() for k, v in body.params.items() if str(v).strip() != ""}
+    missing = [k for k in REQUIRED if k not in p]
+    if missing:
+        raise HTTPException(400, "필수 항목이 비어 있어요: " + ", ".join(missing))
+    if not body.confirm:
+        raise HTTPException(400, "최종 확인 체크가 필요해요")
+    with db() as c:  # 같은 셀러코드 중복 등록 방지
+        dup = c.execute("SELECT gd_no FROM registrations WHERE seller_code=? AND ok=1", (p["SellerCode"],)).fetchone()
+    if dup:
+        raise HTTPException(409, f"셀러코드 {p['SellerCode']}는 이미 등록됐어요 (상품번호 {dup['gd_no']}). 셀러코드를 바꿔 주세요")
+    if DEMO:
+        res = {"ResultCode": 0, "ResultMsg": "DEMO", "ResultObject": {"GdNo": f"DEMO{secrets.randbelow(10**6):06d}"}}
+    else:
+        res = client().write("ItemsBasic.SetNewGoods", p)
+    ok = str(res.get("ResultCode")) == "0"
+    obj = res.get("ResultObject")
+    gd = str((obj or {}).get("GdNo", "")) if isinstance(obj, dict) else str(obj or "")
+    msg = res.get("ResultMsg") or res.get("ErrorMsg") or ""
+    with db() as c:
+        c.execute("INSERT INTO registrations(created,seller_code,title,price,ok,gd_no,message,params) VALUES(?,?,?,?,?,?,?,?)",
+                  (datetime.now().isoformat(timespec="seconds"), p["SellerCode"], p["ItemTitle"], num(p["ItemPrice"]),
+                   int(ok), gd, json.dumps(res, ensure_ascii=False)[:1500], json.dumps(p, ensure_ascii=False)))
+    if ok and not DEMO:
+        threading.Thread(target=sync, daemon=True).start()
+    return {"ok": ok, "gd_no": gd, "message": msg, "raw": res}
+
+
+@app.get("/api/registrations", dependencies=[Depends(auth)])
+def registrations():
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT id,created,seller_code,title,price,ok,gd_no,message FROM registrations ORDER BY id DESC LIMIT 100")]
+    return rows
+
+
+@app.get("/api/config", dependencies=[Depends(auth)])
+def config():
+    return {"demo": DEMO, "ai": bool(AI_KEY)}
 
 
 @app.get("/", dependencies=[Depends(auth)])

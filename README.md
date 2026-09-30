@@ -14,6 +14,8 @@
    | DASH_PASSWORD | 접속 비밀번호 (브라우저 로그인 창에서 아이디는 아무거나) |
    | DELAY_DAYS | 배송지연 기준일 (기본 3) |
    | SYNC_MINUTES | 동기화 주기 분 (기본 60) |
+   | ANTHROPIC_API_KEY | (선택) 상품 등록 화면의 AI 일본어 초안용 |
+   | TZ | Asia/Seoul |
    | DB_PATH | `/data/qoo10.db` (아래 볼륨 사용 시) |
 4. Settings → Volumes → `/data` 마운트 (재배포해도 데이터 유지)
 5. Settings → Networking → Generate Domain → 접속
@@ -32,3 +34,9 @@ uvicorn app:app --reload
   키가 셀러 인증키가 아닐 가능성 → QSM에서 셀러 인증키 확인/재발급.
 - 사용 메서드: `ItemsLookup.GetAllGoodsInfo`(상품), `ShippingBasic.GetShippingInfo_v2`(주문).
   응답 필드명은 여러 후보로 매핑했지만 실제 응답으로 검증 전입니다. 첫 동기화 후 값이 비는 칸이 있으면 DB의 raw 컬럼을 보고 `app.py`의 `pick(...)` 키를 맞추세요.
+
+## 상품 등록 화면
+- 사이드바 '상품 등록': ① 기존 상품 복제(카테고리·배송·연락처) → ② 한국어 정보로 AI 일본어 초안 → ③ 가격·재고·옵션 → ④ 이미지 업로드 → ⑤ 미리보기·최종 확인 후 등록
+- 같은 셀러코드는 두 번 등록되지 않게 막음. 등록 기록은 '등록 이력'
+- 업로드한 이미지는 서버의 `/img/...` 주소로 공개되어 큐텐이 가져감 → **Volume(/data) + DB_PATH=/data/qoo10.db 설정 필수** (없으면 재배포 때 이미지가 사라져 상세페이지 이미지가 깨질 수 있음)
+- 등록은 ItemsBasic.SetNewGoods, 신형 POST v1.1→1.0 순서 (존재하지 않는 API일 때만 다음 버전 시도 → 중복 등록 없음)
