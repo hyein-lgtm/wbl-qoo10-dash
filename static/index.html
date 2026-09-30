@@ -82,6 +82,8 @@ main{padding:18px 16px 60px}.menu-btn{display:inline-block}}
   <div class="grp">상품</div>
   <nav>
     <a data-p="register">＋ 상품 등록</a>
+    <a data-p="sheet">📊 정리표 일괄 등록</a>
+    <a data-p="batch">📁 폴더 일괄 등록</a>
     <a data-p="patch">✎ 상품 수정</a>
     <a data-p="reglog">✓ 등록 이력</a>
   </nav>
@@ -172,7 +174,7 @@ const pages={
    `${rows.length}건 · 합계 ${won(rows.reduce((a,r)=>a+r.amount,0))}`)},
  async register(){
   const [cfg,prods,groups]=await Promise.all([api('/api/config'),api('/api/products?days=90'),api('/api/delivery-groups').catch(()=>[])]);
-  R.cfg=cfg;
+  R.cfg=cfg;if(cfg.contact&&(!R.v.ContactInfo||R.v.ContactInfo==='cx@wisland.co.kr'))R.v.ContactInfo=cfg.contact;
   const F=(k,l,o={})=>`<div class="f ${o.wide?'wide':''}"><label>${l}${o.req?' <b>*</b>':''}</label>${o.ta?`<textarea id="r_${k}" placeholder="${o.ph||''}">${esc(R.v[k]??'')}</textarea>`:
     o.sel?`<select id="r_${k}">${o.sel.map(([v,t])=>`<option value="${esc(v)}" ${String(R.v[k]??'')===String(v)?'selected':''}>${esc(t)}</option>`).join('')}</select>`:
     `<input id="r_${k}" type="${o.type||'text'}" placeholder="${o.ph||''}" value="${esc(R.v[k]??'')}">`}${o.hint?`<div class="hint">${o.hint}</div>`:''}</div>`;
@@ -216,6 +218,43 @@ const pages={
    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="confirm"> 위 내용을 확인했고 큐텐에 <b>${cfg.demo?'(데모) ':''}실제 등록</b>합니다</label>
    <div style="margin-top:12px"><button class="btn pri" id="regBtn" onclick="doRegister()">큐텐에 등록하기</button></div>
    <div id="regResult"></div></div>`},
+ async sheet(){
+  const inp=(id,l,v,t='number')=>`<div class="f"><label>${l}</label><input id="${id}" type="${t}" value="${esc(v)}"></div>`;
+  return head('정리표 일괄 등록','Qoo10_주얼패치_정리표.xlsx 를 올리면 단품·모음전을 한 번에 등록·수정해요')+
+  `<div class="panel"><div class="step"><i>1</i>정리표 올리기</div>
+    <input type="file" id="x_file" accept=".xlsx"> <span class="desc" id="x_msg">${X.items.length?`${X.items.length}개 상품을 읽었어요`:''}</span>
+    <div class="hint">읽는 시트: 단품 · 옵션 · 모음전_리스팅 · 모음전 · QSM일괄등록_초안(상세 HTML)</div>
+    <div style="margin-top:10px"><label class="desc">모음전 상세 HTML이 정리표에 없으면 <b>전달 폴더</b>를 골라 주세요 (경로로 자동 연결)</label><br><input type="file" id="x_dir" webkitdirectory directory multiple> <span class="desc" id="x_dirmsg"></span></div></div>
+  <div class="panel"><div class="step"><i>2</i>가격·재고 기준</div><div class="form">
+    <div class="f"><label>단품 판매가 기준</label><select id="x_src"><option value="mall" ${X.cfg.src==='mall'?'selected':''}>자사몰가 × 비율</option><option value="now" ${X.cfg.src==='now'?'selected':''}>지금 큐텐가 유지 (없으면 비율)</option></select></div>
+    ${inp('x_krw','기준 한국가',X.cfg.krw)}${inp('x_jpy','기준 큐텐가',X.cfg.jpy)}${inp('x_cbase','모음전 판매가',X.cfg.cbase)}
+    ${inp('x_oqty','옵션당 재고',X.cfg.oqty)}${inp('x_sqty','단품 재고',X.cfg.sqty)}${inp('x_ship','배송 템플릿',X.cfg.ship,'text')}${inp('x_prefix','셀러코드 앞글자',X.cfg.prefix,'text')}</div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="chip" onclick="xPrice()">↻ 가격 다시 계산</button><button class="chip" onclick="xPrice(true)">자사몰 최신가 불러오기</button><span class="desc" id="x_pmsg"></span></div>
+    <div class="hint">판매가 = 자사몰 판매가 × (기준 큐텐가 ÷ 기준 한국가), 10엔 단위 · 정가 = 소비자가 ÷ 환율(100엔=930원), 100엔 단위 내림 · 모음전 옵션 추가금 = 디자인 가격 − 모음전 판매가 (±50% 상한, 더 싼 디자인은 +0)</div></div>
+  <div class="panel"><div class="step"><i>3</i>확인 후 실행</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn pri" id="x_run" onclick="xRun()">▶ 선택 상품 실행</button><span class="desc" id="x_rmsg"></span></div>
+    <div id="xtable" style="margin-top:12px"></div></div>`},
+ async batch(){
+  const prods=await api('/api/products?days=90');
+  if(!B.tpl&&prods.length)B.tpl=(prods.find(p=>p.item_code==='1219648670')||prods[0]).item_code;
+  const inp=(id,l,v,t='text',w='')=>`<div class="f" ${w}><label>${l}</label><input id="${id}" type="${t}" value="${esc(v)}"></div>`;
+  return head('폴더 일괄 등록','NAS의 상품 폴더(썸네일·추가이미지·상세 HTML)를 골라 한 번에 큐텐에 신규 등록해요')+
+  `<div class="panel"><div class="step"><i>1</i>공통 설정</div><div class="form">
+    <div class="f wide"><label>카테고리·배송 설정을 가져올 상품</label><select id="b_tpl">${prods.map(p=>`<option value="${esc(p.item_code)}" ${B.tpl===p.item_code?'selected':''}>${esc(p.item_code)} · ${esc(p.title||'')}</option>`).join('')}</select><div class="hint" id="b_tplmsg">${B.tplv?`카테고리 ${esc(B.tplv.SecondSubCat)} · 배송 ${esc(B.tplv.ShippingNo)}`:''}</div></div>
+    ${inp('b_krw','기준 한국가 (원)',B.cfg.krw,'number')}${inp('b_jpy','기준 큐텐가 (엔)',B.cfg.jpy,'number')}
+    ${inp('b_oqty','옵션당 재고',B.cfg.oqty,'number')}${inp('b_sqty','단품 재고',B.cfg.sqty,'number')}
+    ${inp('b_prefix','셀러코드 앞글자',B.cfg.prefix)}${inp('b_url','자사몰 카테고리 주소',B.cfg.url,'text','style="grid-column:span 2"')}</div></div>
+  <div class="panel"><div class="step"><i>2</i>폴더 선택</div>
+    <input type="file" id="b_dir" webkitdirectory directory multiple>
+    <div class="hint">상품 폴더들이 들어 있는 <b>상위 폴더</b>를 고르세요 (상품 폴더 하나만 골라도 돼요). 폴더마다: 썸네일 이미지 · 추가이미지 폴더 · 상세 .html을 자동으로 구분해요.<br>
+    폴더 이름에 <b>자사몰 상품번호(예: 7663)</b>가 있으면 가격을 정확히 찾아요.</div></div>
+  <div class="panel"><div class="step"><i>3</i>자동 준비 → 등록</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+     <button class="btn pri" id="b_prep" onclick="batchPrepare()">▶ 자동 준비 (옵션·가격·상품명)</button>
+     <button class="btn" id="b_reg" onclick="batchRegister()" style="border-color:var(--blue);color:var(--blue)">✓ 준비된 상품 큐텐 등록</button>
+     <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="b_auto" ${B.auto?'checked':''}> 준비가 끝나면 바로 등록 (버튼 하나로)</label>
+     <span class="desc" id="b_msg"></span></div>
+    <div id="btable" style="margin-top:12px"></div></div>`},
  async patch(){
   const [prods,regs]=await Promise.all([api('/api/products?days=90'),api('/api/registrations')]);
   const mine=regs.filter(r=>r.ok&&r.gd_no),mineSet=new Set(mine.map(r=>r.gd_no));
@@ -227,7 +266,7 @@ const pages={
      ${mine.length?`<optgroup label="에이전트로 등록한 상품">${mine.map(r=>opt(r.gd_no,`${r.gd_no} · ${r.title}`,r.seller_code)).join('')}</optgroup>`:''}
      <optgroup label="판매중 전체 상품">${prods.filter(p=>!mineSet.has(p.item_code)).map(p=>opt(p.item_code,`${p.item_code} · ${p.title||''}`,p.seller_code)).join('')}</optgroup></select></div>
     <div class="f"><label>상품번호 직접 입력</label><input id="p_code2" placeholder="1219648670" value="${esc(E.code||'')}"></div>
-    <div class="f"><label>&nbsp;</label><button class="btn pri" onclick="loadEdit()">불러오기</button></div></div><div class="hint" id="loadMsg">${E.loaded?`상품 ${esc(E.code)} 불러옴 · 바꾼 칸에 <span class="tag orange">변경됨</span> 표시가 붙어요`:''}</div></div>
+    <div class="f"><label>&nbsp;</label><button class="btn pri" onclick="loadEdit()">불러오기</button></div></div><div style="margin-top:10px"><button class="chip" onclick="bulkContact()">✉ 판매중 전체 상품 A/S 연락처 통일</button> <span class="desc" id="bulkMsg"></span></div><div class="hint" id="loadMsg">${E.loaded?`상품 ${esc(E.code)} 불러옴 · 바꾼 칸에 <span class="tag orange">변경됨</span> 표시가 붙어요`:''}</div></div>
   ${E.loaded?`<div class="panel"><div class="step"><i>2</i>기본 정보</div><div class="form">
     ${F('ItemTitle','상품명 (일본어)',{wide:1,hint:`${[...(E.v.ItemTitle||'')].length}자`})}${F('PromotionName','홍보 문구')}${F('Keyword','검색 키워드')}
     ${F('SecondSubCat','카테고리 코드')}${F('ShippingNo','배송 템플릿')}${F('ContactInfo','A/S 연락처')}${F('AvailableDateValue','발송까지 영업일',{type:'number'})}</div></div>
@@ -255,14 +294,14 @@ const pages={
    {k:'products',h:'상품',r:1},{k:'orders',h:'주문',r:1},{k:'message',h:'메시지',t:1}],'최근 50회')}
 };
 const DD=()=>SUM?.delay_days??3;
-const R={v:{ProductionPlaceType:'2',ProductionPlace:'KR',AvailableDateValue:'3',ShippingNo:'813346'},gallery:[],toDesc:false,inv:{name:'',rows:[]},pcode:'',cfg:{}};
+const R={v:{ContactInfo:'cx@wisland.co.kr',ProductionPlaceType:'2',ProductionPlace:'KR',AvailableDateValue:'3',ShippingNo:'813346'},gallery:[],toDesc:false,inv:{name:'',rows:[]},pcode:'',cfg:{}};
 const RKEYS=['clone','SecondSubCat','ShippingNo','ContactInfo','name_ko','keywords','features','spec','usage','ItemTitle','PromotionName','Keyword','SellerCode','ItemPrice','RetailPrice','ItemQty','Weight','ProductionPlaceType','ProductionPlace','AvailableDateValue','IndustrialCode','StandardImage','ItemDescription'];
 function readR(){RKEYS.forEach(k=>{const e=$('#r_'+k);if(e)R.v[k]=e.value});
   if($('#o_name'))R.inv.name=$('#o_name').value;if($('#toDesc'))R.toDesc=$('#toDesc').checked;
   document.querySelectorAll('.optrow').forEach((r,i)=>{const [a,b,c,d]=r.querySelectorAll('input');R.inv.rows[i]={value:a.value,price:b.value,qty:c.value,code:d.value}});
   if($('#p_code2'))R.pcode=$('#p_code2').value.trim()}
 const STORE={};
-function swapState(from,to){if(from===to)return;if(['register','patch'].includes(from)){readR();STORE[from]={gallery:R.gallery,inv:R.inv}}
+function swapState(from,to){if(from==='sheet')readX();if(from==='batch')readB();if(from===to)return;if(['register','patch'].includes(from)){readR();STORE[from]={gallery:R.gallery,inv:R.inv}}
   if(['register','patch'].includes(to)){const s=STORE[to]||{gallery:[],inv:{name:'',rows:[]}};R.gallery=s.gallery;R.inv=s.inv}}
 function galleryBlock(withDesc){return `<div class="f wide" style="margin-top:12px"><label>추가이미지 (갤러리 · 최대 50장, 올린 순서대로 노출)</label>
   <input type="file" accept="image/*" multiple onchange="upImg(this,'gallery')"><div class="thumbs" id="galThumbs"></div>
@@ -274,7 +313,7 @@ function optionBlock(){return `<div class="f wide" style="margin-top:12px"><labe
    <div class="f"><label>값 한꺼번에 입력 (한 줄에 하나)</label><textarea id="o_bulk" style="min-height:44px" placeholder="A.スワール&#10;B.パール&#10;C.ハート"></textarea></div>
    <div class="f"><label>옵션당 재고</label><div style="display:flex;gap:6px"><input id="o_qty" type="number" value="10" style="width:80px"><button class="chip" onclick="bulkOpt()">목록 만들기</button></div></div></div>
   <div style="display:grid;grid-template-columns:1fr 110px 90px 140px 32px;gap:6px;font-size:11px;color:var(--sub);margin:10px 0 4px"><span>옵션 값</span><span>추가금액(엔)</span><span>재고</span><span>옵션 코드(선택)</span><span></span></div>
-  <div id="opts"></div><button class="chip" onclick="addOpt()">+ 한 줄 추가</button>
+  <div id="opts"></div><button class="chip" onclick="addOpt()">+ 한 줄 추가</button> <button class="chip" onclick="splitAll()" title="A.スワール(ゴールド/シルバー) → 2개로">⇉ 색상별로 나누기</button>
   <button class="chip" style="border-color:var(--blue);color:var(--blue)" id="aiOptBtn" onclick="aiOptions()">✦ 상세페이지에서 옵션 가져오기</button> <span class="desc" id="aiOptMsg"></span>
   <div class="form" style="grid-template-columns:1fr 130px 130px auto;align-items:end;margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
    <div class="f"><label>자사몰 가격 연동 · 카테고리 주소</label><input id="pm_url" value="${esc(R.pm?.url||'https://wblbeauty.com/product/list.html?cate_no=1105')}"></div>
@@ -308,6 +347,14 @@ function renderGal(){const g=$('#galThumbs');if(!g)return;g.innerHTML=R.gallery.
 window.mv=(i,d)=>{const g=R.gallery;[g[i],g[i+d]]=[g[i+d],g[i]];refreshAll()};
 function refreshAll(){readR();renderGal();if(st.page==='patch')refreshE();if(st.page==='register')refreshR();else{const rs=R.inv.rows.filter(r=>r&&r.value);if($('#optSum'))$('#optSum').textContent=rs.length?`${rs.length}개 옵션 · 재고 합계 ${rs.reduce((a,r)=>a+(+r.qty||0),0)}개`:''}}
 window.addOpt=()=>{readR();R.inv.rows.push({value:'',price:0,qty:$('#o_qty')?.value||10,code:''});renderOpts();refreshAll()};
+const SEP=/\s*[\/／・、,，|｜]\s*|\s+or\s+/;
+function splitVariant(v){v=String(v||'').trim();let m=v.match(/^(.*?)\s*[（(\[【]([^()（）\[\]【】]+)[)）\]】]\s*$/);
+  if(m){const parts=m[2].split(SEP).map(x=>x.replace(/^\d+\s*(colors?|色|type|種)$/i,'').trim()).filter(Boolean);if(parts.length>1){const base=m[1].trim();return parts.map(p=>/(^|\s)[A-Z]$/.test(base)?`${base}(${p})`:`${base} ${p}`)}}
+  m=v.match(/^(.*\S)\s+(\S+(?:\s*[\/／・|｜]\s*\S+)+)$/);if(m){const parts=m[2].split(SEP).filter(Boolean);if(parts.length>1)return parts.map(p=>`${m[1]} ${p}`)}
+  return [v]}
+function splitRows(rows){const out=[];rows.forEach(r=>{const vs=splitVariant(r.value);vs.forEach((v,i)=>out.push({...r,value:v,code:r.code&&vs.length>1?`${r.code}-${i+1}`:r.code}))});return out}
+window.splitAll=()=>{readR();const before=R.inv.rows.filter(r=>r&&r.value).length;R.inv.rows=splitRows(R.inv.rows.filter(r=>r&&r.value));renderOpts();refreshAll();
+  const after=R.inv.rows.length;$('#aiOptMsg').innerHTML=after>before?`<b class="green">${before}개 → ${after}개로 색상별로 나눴어요</b>`:'나눌 수 있는 옵션이 없어요 (예: "A.スワール(ゴールド/シルバー)" 형태만 나눠요)'};
 window.aiOptions=async(auto)=>{readR();const isEdit=st.page==='patch';if(isEdit)readE();
   const html=isEdit?(E.v.ItemDescription||''):(R.v.ItemDescription||''),code=isEdit?E.code:'';
   if(!html.trim()&&!code){if(!auto)alert('상세 HTML을 먼저 넣어 주세요');return}
@@ -316,7 +363,7 @@ window.aiOptions=async(auto)=>{readR();const isEdit=st.page==='patch';if(isEdit)
    if(!r.ok)throw new Error(j.detail);
    if(!j.values.length){m.textContent=`옵션을 찾지 못했어요 (이미지 ${j.images}장 확인) ${j.note||''}`}
    else{const q=$('#o_qty')?.value||10;if(j.name)$('#o_name').value=j.name;R.inv.name=j.name||R.inv.name;
-    R.inv.rows=j.values.map(v=>({value:v,price:0,qty:q,code:''}));renderOpts();refreshAll();
+    const n0=j.values.length;R.inv.rows=splitRows(j.values.map(v=>({value:v,price:0,qty:q,code:''})));renderOpts();refreshAll();j.values=R.inv.rows.map(r=>r.value);if(R.inv.rows.length>n0)j.note=(j.note?j.note+' · ':'')+`색상 포함 ${n0}개를 ${R.inv.rows.length}개로 나눴어요`;
     m.innerHTML=`<b class="green">${j.values.length}개 옵션을 채웠어요</b> (${j.found_in==='image'?'이미지에서':'글자에서'} 찾음) · 표기가 맞는지 꼭 확인해 주세요${j.note?' · '+esc(j.note):''}`}}
   catch(e){m.textContent='실패: '+e.message}b.disabled=false};
 window.priceMap=async()=>{readR();const vals=R.inv.rows.filter(r=>r&&r.value).map(r=>r.value);if(!vals.length){alert('먼저 옵션 목록을 만들어 주세요');return}
@@ -329,12 +376,132 @@ window.priceMap=async()=>{readR();const vals=R.inv.rows.filter(r=>r&&r.value).ma
    box.innerHTML=`<table class="sumtbl" style="min-width:0;margin-top:10px"><tr><td>옵션</td><td>자사몰 상품 · 판매가 → 추가금</td></tr>${j.rows.map(m=>`<tr><td>${esc(m.value)}</td><td>${m.kr_name?`${esc(m.kr_name)} · ${Math.round(m.kr_price).toLocaleString()}원 → <b>${m.add>=0?'+':''}${m.add}엔</b>`:'<span class="red">못 찾음 (직접 입력)</span>'}
     ${m.confidence==='low'?' <span class="tag orange">확인 필요</span>':''}${m.over_cap?` <span class="tag red">상한(±50%) 초과 → ${Math.floor(+R.pm.jpy*0.5/10)*10}엔으로 맞춤</span>`:''}</td></tr>`).join('')}</table>`}
   catch(e){box.innerHTML=`<div class="result ng">${esc(e.message)}</div>`}b.disabled=false};
-window.bulkOpt=()=>{readR();const q=$('#o_qty').value||10;$('#o_bulk').value.split('\n').map(x=>x.trim()).filter(Boolean).forEach(v=>R.inv.rows.push({value:v,price:0,qty:q,code:''}));$('#o_bulk').value='';renderOpts();refreshAll()};
+window.bulkOpt=()=>{readR();const q=$('#o_qty').value||10;splitRows($('#o_bulk').value.split('\n').map(x=>x.trim()).filter(Boolean).map(v=>({value:v,price:0,qty:q,code:''}))).forEach(r=>R.inv.rows.push(r));$('#o_bulk').value='';renderOpts();refreshAll()};
 const E={code:'',sc:'',orig:{},v:{},loaded:false};
 const EBASIC=['ItemTitle','PromotionName','Keyword','SecondSubCat','ShippingNo','ContactInfo','AvailableDateValue','RetailPrice'];
 const EKEYS=[...EBASIC,'ItemPrice','ItemQty','StandardImage','ItemDescription'];
 function readE(){EKEYS.forEach(k=>{const e=$('#e_'+k);if(e)E.v[k]=e.value});readR()}
 const clean=v=>v==null?'':(/^-?\d+\.0+$/.test(String(v))?String(parseInt(v)):String(v));
+const X={items:[],prices:null,cfg:{src:'mall',krw:17900,jpy:2400,cbase:2400,oqty:10,sqty:30,ship:'813346',prefix:'WBL-'}};
+const CC={'中国':'CN','韓国':'KR','日本':'JP'};
+function readX(){const g=id=>$('#'+id)?.value;if(!$('#x_krw'))return;X.cfg={src:g('x_src'),krw:+g('x_krw'),jpy:+g('x_jpy'),cbase:+g('x_cbase'),oqty:+g('x_oqty'),sqty:+g('x_sqty'),ship:g('x_ship'),prefix:g('x_prefix')};
+  document.querySelectorAll('[data-xc]').forEach(e=>{X.items[+e.dataset.xc].on=e.checked});document.querySelectorAll('[data-xm]').forEach(e=>{X.items[+e.dataset.xm].mode=e.value});
+  document.querySelectorAll('[data-xp]').forEach(e=>{X.items[+e.dataset.xp].price=+e.value});document.querySelectorAll('[data-xcode]').forEach(e=>{X.items[+e.dataset.xcode].qoo_code=e.value.trim()})}
+window.xPrice=async(refresh)=>{readX();try{X.prices=(await api(`/api/mall/prices${refresh?'?refresh=true':''}`));$('#x_pmsg').textContent=`자사몰 가격: ${X.prices.source}`}catch(e){$('#x_pmsg').textContent='자사몰 가격 실패: '+e.message;return}
+  const P=X.prices.prices,ratio=X.cfg.jpy/X.cfg.krw,J=k=>Math.round(k*ratio/10)*10,fx=X.prices.fx;
+  X.items.forEach(it=>{it.warn=[];
+   if(it.kind==='단품'){const m=P[it.no];const mall=m?J(m.price):0;it.price=X.cfg.src==='now'&&it.price_now?it.price_now:mall||it.price_now||0;
+     it.retail=m&&m.consumer?Math.floor(m.consumer/fx/100)*100:'';if(it.retail&&it.retail<=it.price)it.retail='';if(!m)it.warn.push('자사몰 가격 없음');
+     it.rows=(it.opt?.rows||[]).map((r,k)=>({value:r.value,value2:r.value2,price:r.add||0,qty:X.cfg.oqty,code:`${X.cfg.prefix}${it.no}-${k+1}`}))}
+   else{const base=X.cfg.cbase;it.price=base;it.retail='';
+     it.rows=(it.coll?.rows||[]).map((r,k)=>{const m=P[r.no];const jp=m?J(m.price):base;let add=jp-base;const cap=Math.floor(base*0.5/10)*10;const flag=add>cap?'상한':add<0?'더 쌈':'';add=Math.max(0,Math.min(add,cap));
+       if(!m)it.warn.push(`${r.letter}: 자사몰 가격 없음`);return {value:r.value,price:add,qty:X.cfg.oqty,code:`${X.cfg.prefix}C${k+1}`,flag,jp}})}
+   if(it.kind==='단품'&&it.mode==='new'&&it.qoo_code&&/판매 중/.test(it.status))it.warn.push(`기존 ${it.qoo_code} 판매 중 — 신규 등록 후 기존 상품 판매 종료 필요(중복 출품)`);
+   if(!it.desc)it.warn.push('상세 HTML 없음');if(it.mode==='update'&&!it.qoo_code)it.warn.push('수정할 큐텐 상품번호 없음')});renderX()};
+function renderX(){const t=$('#xtable');if(!t)return;if(!X.items.length){t.innerHTML='<div class="desc">정리표를 올리면 목록이 나와요</div>';return}
+  const tag=s=>!s?'':s.startsWith('✅')?'green':s.startsWith('❌')?'red':'orange';
+  t.innerHTML=`<div class="tbl" style="margin-top:0"><table><thead><tr><th><input type="checkbox" checked onchange="X.items.forEach(i=>i.on=this.checked);renderX()"></th><th>구분</th><th>실행</th><th>번호</th><th>상품명</th><th class="r">판매가</th><th class="r">정가</th><th class="r">옵션</th><th class="r">추가이미지</th><th>상세</th><th>확인/결과</th></tr></thead><tbody>
+  ${X.items.map((it,i)=>`<tr><td><input type="checkbox" data-xc="${i}" ${it.on!==false?'checked':''}></td><td>${it.kind}</td>
+   <td><select data-xm="${i}" style="font:inherit;font-size:12px"><option value="new" ${it.mode==='new'?'selected':''}>신규 등록</option><option value="update" ${it.mode==='update'?'selected':''}>기존 수정</option></select>
+    ${it.mode==='update'?`<input data-xcode="${i}" value="${esc(it.qoo_code)}" placeholder="큐텐 상품번호" style="width:100px;font-size:12px">`:''}</td>
+   <td>${esc(it.no||'')}</td><td class="t" title="${esc(it.title)}">${esc(it.title)}</td>
+   <td class="r"><input data-xp="${i}" type="number" value="${it.price||''}" style="width:72px;text-align:right;font-size:12px"></td><td class="r">${it.retail?won(it.retail):'-'}</td>
+   <td class="r">${it.rows?.length||0}${it.rows?.length?`<details><summary class="hint">보기</summary><div class="hint" style="text-align:left;white-space:normal;min-width:260px">${it.rows.map(r=>`${esc(r.value)}${r.value2?' / '+esc(r.value2):''} <b>${r.price?'+'+r.price:'+0'}</b>${r.flag?` <span class="${r.flag==='상한'?'red':'orange'}">${r.flag}</span>`:''}`).join('<br>')}</div></details>`:''}</td>
+   <td class="r">${it.gallery.length}</td><td>${it.desc?'✓':'<span class="red">없음</span>'}</td>
+   <td style="white-space:normal;min-width:180px">${it.result?`<span class="tag ${tag(it.result)}">${esc(it.result)}</span>`:''}${(it.warn||[]).map(w=>`<div class="hint orange">⚠ ${esc(w)}</div>`).join('')}</td></tr>`).join('')}</tbody></table></div>`;
+  t.querySelectorAll('[data-xm]').forEach(e=>e.onchange=()=>{readX();renderX()})}
+window.xRun=async()=>{readX();const list=X.items.filter(i=>i.on!==false&&!String(i.result||'').startsWith('✅'));if(!list.length){alert('실행할 상품이 없어요');return}
+  const bad=list.filter(i=>!i.desc||!i.price||(i.mode==='update'&&!i.qoo_code));if(bad.length){alert(`확인이 필요한 상품이 ${bad.length}개 있어요 (상세 없음/가격 없음/상품번호 없음). 체크를 빼거나 채운 뒤 실행해 주세요.\n${bad.map(b=>b.no||b.kr_name).join(', ')}`);return}
+  const nNew=list.filter(i=>i.mode==='new').length,nUp=list.length-nNew;
+  if(!confirm(`신규 등록 ${nNew}개 · 기존 수정 ${nUp}개를 실행해요. 진행할까요?`))return;
+  const btn=$('#x_run');btn.disabled=true;let n=0;
+  for(const it of list){n++;$('#x_rmsg').textContent=`${n}/${list.length} 진행 중… (${it.no||it.kr_name})`;it.result='진행 중';renderX();
+   const sc=it.kind==='단품'?`${X.cfg.prefix}${it.no}`:`${X.cfg.prefix}COLL-${(it.kr_name.match(/[A-Z]+/)||['X'])[0]}`;
+   const two=!!(it.opt?.name2);const optPayload=it.rows.length?{name:it.kind==='단품'?it.opt.name:(it.coll?.name||'デザイン'),name2:two?it.opt.name2:'',rows:it.rows}:{};
+   const qty=it.rows.length?it.rows.length*X.cfg.oqty:X.cfg.sqty;const origin=(it.origin||'').split(/[・,、]/)[0].trim();
+   const basic={SecondSubCat:it.category,ShippingNo:X.cfg.ship,ProductionPlaceType:'2',ProductionPlace:CC[origin]||'KR',AvailableDateType:'0',AvailableDateValue:'3',AdultYN:'N',
+     ItemTitle:it.title,PromotionName:it.promo,BrandNo:it.brand,Material:it.material,Keyword:it.keywords.join(','),RetailPrice:it.retail||''};
+   try{let j;
+    if(it.mode==='new'){j=await postJ('/api/items/register',{params:{...basic,SellerCode:sc,ItemPrice:it.price,ItemQty:qty,StandardImage:it.main,ItemDescription:it.desc},confirm:true,gallery:it.gallery,options:optPayload});
+     const sub=[j.gallery,j.options].filter(x=>x&&String(x.ResultCode)!=='0');it.result=j.ok?(sub.length?`✅ ${j.gd_no} (일부 실패: ${sub.map(x=>x.ResultMsg).join(', ')})`:`✅ ${j.gd_no}`):`❌ ${j.message}`}
+    else{j=await postJ(`/api/items/${it.qoo_code}/update`,{seller_code:'',basic,price_qty:{price:it.price,qty},image:it.main,description:it.desc,gallery:it.gallery,options:optPayload});
+     const ng=Object.entries(j.steps).filter(([,x])=>String(x.ResultCode)!=='0');it.result=ng.length?`❌ 일부 실패: ${ng.map(([k,x])=>k+' '+(x.ResultMsg||'')).join(', ')}`:`✅ 수정 완료 ${it.qoo_code}`}}
+   catch(e){it.result='❌ '+e.message}renderX()}
+  btn.disabled=false;$('#x_rmsg').textContent=`완료 ${list.filter(i=>String(i.result).startsWith('✅')).length}/${list.length} · 결과는 등록 이력에도 남아요`};
+const B={items:[],tpl:'',tplv:null,auto:false,cfg:{krw:17900,jpy:2400,oqty:10,sqty:30,prefix:'WBL-',url:'https://wblbeauty.com/product/list.html?cate_no=1105'}};
+const IMG=/\.(jpe?g|png|gif|webp)$/i;
+function readB(){const g=id=>$('#'+id)?.value;if(!$('#b_krw'))return;B.cfg={krw:+g('b_krw'),jpy:+g('b_jpy'),oqty:+g('b_oqty'),sqty:+g('b_sqty'),prefix:g('b_prefix'),url:g('b_url')};B.tpl=g('b_tpl');B.auto=$('#b_auto').checked;
+  document.querySelectorAll('[data-bt]').forEach(e=>{const it=B.items[+e.dataset.bt];if(it)it.title=e.value});document.querySelectorAll('[data-bc]').forEach(e=>{const it=B.items[+e.dataset.bc];if(it)it.on=e.checked})}
+async function loadTpl(){const code=$('#b_tpl')?.value;if(!code)return;try{const j=await api(`/api/items/${code}/detail`);let o=j.ResultObject;o=Array.isArray(o)?o[0]:(o||{});
+  const f=(...ks)=>{for(const k of ks)if(o[k]!=null&&o[k]!=='')return String(o[k]).replace(/\.0+$/,'');return ''};
+  B.tplv={SecondSubCat:f('SecondSubCatCd','SecondSubCat'),ShippingNo:f('ShippingNo')||'813346',ProductionPlaceType:f('ProductionPlaceType')||'2',ProductionPlace:f('ProductionPlace')||'KR',AvailableDateValue:f('AvailableDateValue')||'3'};
+  $('#b_tplmsg').textContent=`카테고리 ${B.tplv.SecondSubCat} · 배송 ${B.tplv.ShippingNo}`}catch(e){$('#b_tplmsg').textContent='설정을 가져오지 못했어요: '+e.message}}
+const SUBDIR=/^(썸네일|상세|thumb(nail)?s?|detail|추가이미지)$/i;
+function groupFolder(files){const arr=[...files].filter(f=>!/(^|\/)\./.test(f.webkitRelativePath)&&!/thumbs\.db$/i.test(f.name));
+  const byP={};
+  arr.forEach(f=>{const parts=f.webkitRelativePath.normalize('NFC').split('/');
+    let k=parts.findIndex((p,ix)=>ix<parts.length-1&&SUBDIR.test(p));           // 상품폴더/썸네일/01.jpg 구조
+    let key,rel;if(k>0){key=parts.slice(0,k).join('/');rel=parts.slice(k)}
+    else{if(parts.length<3&&parts.length>1){key=parts[0];rel=parts.slice(1)}else{key=parts.slice(0,-1).join('/');rel=parts.slice(-1)}}
+    (byP[key]=byP[key]||[]).push({f,rel})});
+  return Object.entries(byP).map(([key,fs])=>{const name=key.split('/').pop();const nat=(a,b)=>a.rel.join('/').localeCompare(b.rel.join('/'),undefined,{numeric:true});fs.sort(nat);
+    const html=fs.find(x=>/\.html?$/i.test(x.f.name));const imgs=fs.filter(x=>IMG.test(x.f.name));
+    const inDir=(x,re)=>x.rel.length>1&&re.test(x.rel[0]);
+    const thumbDir=imgs.filter(x=>inDir(x,/^(썸네일|thumb)/i));
+    let thumb,gal,named=true;
+    if(thumbDir.length){thumb=thumbDir.find(x=>/^0*1[_\-. ]|main|대표/i.test(x.f.name))||thumbDir[0];gal=thumbDir.filter(x=>x!==thumb)}      // 01 = 대표, 02~ = 추가이미지
+    else{gal=imgs.filter(x=>inDir(x,/추가|add|gallery|sub|extra|서브/i));const nm=imgs.find(x=>/썸네일|thumb|대표|main/i.test(x.rel.join('/')));named=!!nm;thumb=nm||imgs.find(x=>x.rel.length===1&&!gal.includes(x));gal=gal.filter(x=>x!==thumb)}
+    const no=(name.match(/(?<!\d)(\d{4,5})(?!\d)/)||[])[1]||'';
+    return {name,no,html,thumb,thumbGuess:!named&&!!thumb,gal,all:fs,on:true,status:'대기',title:'',res:null}}).filter(x=>x.html||x.thumb).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}))}
+function renderB(){const t=$('#btable');if(!t)return;if(!B.items.length){t.innerHTML='<div class="desc">폴더를 선택하면 상품 목록이 나와요</div>';return}
+  const tag=s=>s.startsWith('✅')?'green':s.startsWith('❌')?'red':s==='대기'?'':'orange';
+  t.innerHTML=`<div class="tbl" style="margin-top:0"><table><thead><tr><th><input type="checkbox" onchange="B.items.forEach(i=>i.on=this.checked);renderB()" checked></th><th>폴더</th><th>썸네일</th><th class="r">추가이미지</th><th>상세</th><th>상품명 (일본어)</th><th class="r">판매가</th><th class="r">옵션</th><th>상태</th></tr></thead><tbody>
+  ${B.items.map((it,i)=>`<tr><td><input type="checkbox" data-bc="${i}" ${it.on?'checked':''}></td><td class="t" title="${esc(it.name)}">${esc(it.name)}${it.no?` <span class="tag blue">#${it.no}</span>`:''}</td>
+   <td>${it.thumb?`${it.thumbGuess?'<span class="tag orange">추정</span>':''}<img src="${it.thumbURL||(it.thumbURL=URL.createObjectURL(it.thumb.f))}" style="width:44px;height:44px;object-fit:cover;border-radius:6px">`:'<span class="red">없음</span>'}</td>
+   <td class="r">${it.gal.length}장</td><td>${it.html?'✓':'<span class="red">없음</span>'}</td>
+   <td style="min-width:280px"><input data-bt="${i}" value="${esc(it.title)}" placeholder="준비하면 자동으로 채워져요" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit;font-size:12px"></td>
+   <td class="r">${it.price?won(it.price):'-'}</td><td class="r">${it.opts?it.opts.length:'-'}</td>
+   <td style="white-space:normal;min-width:160px"><span class="tag ${tag(it.status)}">${esc(it.status)}</span>${it.opts&&it.opts.length?`<details><summary class="hint">옵션·추가금</summary><div class="hint">${it.opts.map(o=>`${esc(o.value)} ${o.add>=0?'+':''}${o.add}엔${o.kr_name?` (${esc(o.kr_name)})`:' <b class="red">매칭 없음</b>'}${o.over_cap?' <b class="red">상한</b>':''}${o.confidence==='low'?' <b class="orange">확인</b>':''}`).join('<br>')}</div></details>`:''}</td></tr>`).join('')}</tbody></table></div>`;
+  t.querySelectorAll('[data-bt]').forEach(e=>e.oninput=()=>{B.items[+e.dataset.bt].title=e.value});t.querySelectorAll('[data-bc]').forEach(e=>e.onchange=()=>{B.items[+e.dataset.bc].on=e.checked})}
+async function upFile(file){const fd=new FormData();fd.append('file',file,file.name);const r=await fetch('/api/images',{method:'POST',body:fd});const j=await r.json();if(!r.ok)throw new Error(j.detail);return j.url}
+const postJ=async(u,b)=>{const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});const j=await r.json();if(!r.ok)throw new Error(j.detail||r.status);return j};
+async function prepOne(it){const set=s=>{it.status=s;renderB()};
+  if(!it.thumb)throw new Error('썸네일 없음');if(!it.html)throw new Error('상세 HTML 없음');
+  if(it.thumbGuess){const h=await it.html.f.text();if(h.includes(it.thumb.f.name))throw new Error('썸네일 없음 (파일 이름에 썸네일/thumb를 넣어 주세요)')}
+  set('이미지 업로드 중');it.thumbUrl=it.thumbUrl||await upFile(it.thumb.f);
+  if(!it.galUrls){it.galUrls=[];for(const g of it.gal.slice(0,50))it.galUrls.push(await upFile(g.f))}
+  let html=await it.html.f.text();
+  const rel=[...new Set([...html.matchAll(/src=["']([^"']+)["']/gi)].map(m=>m[1]).filter(u=>!/^(https?:)?\/\//i.test(u)&&!u.startsWith('data:')))];
+  for(const u of rel){const base=decodeURIComponent(u.split('/').pop().split('?')[0]);const hit=it.all.find(x=>x.f.name===base);if(hit){const url=await upFile(hit.f);html=html.split(u).join(url)}}
+  it.htmlText=html;
+  set('옵션 읽는 중');let vals=[],oname='デザイン';try{const o=await postJ('/api/ai/options',{html});vals=o.values||[];oname=o.name||oname}catch(e){it.note='옵션 추출 실패: '+e.message}
+  vals=splitRows(vals.map(v=>({value:v}))).map(r=>r.value);it.oname=oname;
+  set('가격 찾는 중');const pr=await postJ('/api/batch/price',{folder:it.name,values:vals,url:B.cfg.url,base_krw:B.cfg.krw,base_jpy:B.cfg.jpy});
+  if(!pr.item_price)throw new Error('자사몰 가격을 찾지 못했어요');it.price=pr.item_price;it.retail=pr.retail_price;it.opts=pr.options.length>1?pr.options:[];it.mainName=pr.main?.kr_name||it.name;
+  set('상품명 만드는 중');if(!it.title){const t=await postJ('/api/ai/title',{name_ko:`${it.name} / ${it.mainName}`,options:it.opts.map(o=>o.value)});it.title=t.title;it.promo=t.promotion}
+  const miss=it.opts.filter(o=>!o.kr_name).length;set(miss?`준비됨 (옵션 ${miss}개 매칭 확인)`:'준비됨')}
+window.batchPrepare=async()=>{readB();if(!B.tplv)await loadTpl();const list=B.items.filter(i=>i.on&&!i.status.startsWith('✅'));if(!list.length){alert('준비할 상품을 선택해 주세요');return}
+  const btn=$('#b_prep');btn.disabled=true;let n=0;
+  for(const it of list){n++;$('#b_msg').textContent=`${n}/${list.length} 준비 중…`;try{await prepOne(it)}catch(e){it.status='❌ '+e.message;renderB()}}
+  btn.disabled=false;$('#b_msg').textContent=`준비 완료 ${list.filter(i=>i.status.startsWith('준비됨')).length}/${list.length}`;
+  if($('#b_auto').checked)batchRegister(true)};
+window.batchRegister=async(skipConfirm)=>{readB();const list=B.items.filter(i=>i.on&&i.status.startsWith('준비됨'));if(!list.length){alert('준비된 상품이 없어요. 먼저 ▶ 자동 준비를 눌러 주세요');return}
+  if(skipConfirm!==true&&!confirm(`${list.length}개 상품을 큐텐에 신규 등록해요. 진행할까요?`))return;
+  const t=B.tplv||{};const btn=$('#b_reg');btn.disabled=true;let n=0;
+  for(const it of list){n++;$('#b_msg').textContent=`${n}/${list.length} 등록 중…`;it.status='등록 중';renderB();
+   const sc=`${B.cfg.prefix}${it.no||it.name.replace(/[^A-Za-z0-9]/g,'').slice(0,12)||Date.now()}`;
+   const rows=it.opts.map((o,k)=>({value:o.value,price:o.add||0,qty:B.cfg.oqty,code:`${sc}-${k+1}`}));
+   const params={SecondSubCat:t.SecondSubCat,ShippingNo:t.ShippingNo,ProductionPlaceType:t.ProductionPlaceType,ProductionPlace:t.ProductionPlaceType==='2'?t.ProductionPlace:'',
+    AvailableDateType:'0',AvailableDateValue:t.AvailableDateValue,AdultYN:'N',ItemTitle:it.title,PromotionName:it.promo||'',SellerCode:sc,
+    ItemPrice:it.price,RetailPrice:it.retail||'',ItemQty:rows.length?rows.length*B.cfg.oqty:B.cfg.sqty,StandardImage:it.thumbUrl,ItemDescription:it.htmlText};
+   try{const j=await postJ('/api/items/register',{params,confirm:true,gallery:it.galUrls,options:rows.length?{name:it.oname,rows}:{}});
+    const sub=[j.gallery,j.options].filter(x=>x&&String(x.ResultCode)!=='0');
+    it.status=j.ok?(sub.length?`✅ ${j.gd_no} (일부 실패: ${sub.map(x=>x.ResultMsg).join(', ')})`:`✅ ${j.gd_no}`):`❌ ${j.message}`}
+   catch(e){it.status='❌ '+e.message}renderB()}
+  btn.disabled=false;$('#b_msg').textContent=`등록 완료 ${list.filter(i=>i.status.startsWith('✅')).length}/${list.length} · 결과는 등록 이력에도 남아요`};
+window.bulkContact=async()=>{const cfg=await api('/api/config');if(!confirm(`판매중 전체 상품의 A/S 연락처를 ${cfg.contact} 로 바꿔요. 상품 수만큼 시간이 걸려요 (24개 기준 1~2분). 진행할까요?`))return;
+  const m=$('#bulkMsg');m.textContent='변경 중…';try{const r=await fetch('/api/bulk/contact',{method:'POST'});const j=await r.json();if(!r.ok)throw new Error(j.detail);
+   const ng=j.results.filter(x=>!x.ok);m.innerHTML=`<b class="${ng.length?'red':'green'}">${j.ok}/${j.total}개 완료</b>${ng.length?' · 실패: '+ng.map(x=>`${x.item_code}(${esc(x.message)})`).join(', '):''}`}catch(e){m.textContent='실패: '+e.message}};
 window.loadEdit=async()=>{const sel=$('#p_code'),code=($('#p_code2').value.trim()||sel.value);if(!code){alert('상품을 선택하거나 상품번호를 입력해 주세요');return}
   $('#loadMsg').textContent='불러오는 중…';
   try{const j=await api(`/api/items/${code}/detail`);let o=j.ResultObject;o=Array.isArray(o)?o[0]:(o||{});
@@ -396,7 +563,16 @@ window.doRegister=async()=>{const p=buildParams(),b=$('#regBtn');if(!$('#confirm
   try{const r=await fetch('/api/items/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({params:p,confirm:true,gallery:R.gallery,options:invPayload()})});const j=await r.json();
    $('#regResult').innerHTML=!r.ok?`<div class="result ng">등록 전 확인 필요: ${esc(j.detail)}</div>`:j.ok?`<div class="result ok"><b>등록 성공</b> — 상품번호 ${esc(j.gd_no)}. QSM에서 노출 상태를 확인해 주세요.</div>${(j.gallery||j.options)?stepResult(j):''}`:`<div class="result ng"><b>큐텐이 거절했어요</b>: ${esc(j.message)}<details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify(j.raw,null,1))}</pre></details></div>`}
   catch(e){$('#regResult').innerHTML=`<div class="result ng">${esc(e.message)}</div>`}b.disabled=false;b.textContent='큐텐에 등록하기'};
-function bindRegister(){if(st.page==='patch'){const s=$('#p_code');s.onchange=()=>{$('#p_code2').value=s.value};if(!E.loaded)return;renderOpts();renderGal();refreshE();
+function bindRegister(){if(st.page==='sheet'){renderX();
+    $('#x_file').onchange=async e=>{const fd=new FormData();fd.append('file',e.target.files[0]);$('#x_msg').textContent='읽는 중…';
+      try{const r=await fetch('/api/sheet/parse',{method:'POST',body:fd});const j=await r.json();if(!r.ok)throw new Error(j.detail);X.items=j.items.map(i=>({...i,on:true}));$('#x_msg').textContent=`단품 ${X.items.filter(i=>i.kind==='단품').length}개 · 모음전 ${X.items.filter(i=>i.kind==='모음전').length}개를 읽었어요`;await xPrice()}
+      catch(err){$('#x_msg').textContent='읽기 실패: '+err.message}};
+    $('#x_dir').onchange=async e=>{const files=[...e.target.files];let n=0;for(const it of X.items){if(it.desc||!it.desc_path)continue;const want=it.desc_path.replace(/^\/+/,'');
+      const segs=want.normalize('NFC').split('/'),head=segs[0],tail='/'+segs.slice(1).join('/');const f=files.find(f=>{const p=f.webkitRelativePath.normalize('NFC');const ps=p.split('/');return p.endsWith(tail)&&ps.some(x=>x===head||x.startsWith(head+'_')||x.startsWith(head+' '))});if(f){it.desc=await f.text();n++}}
+      $('#x_dirmsg').textContent=`상세 HTML ${n}개를 연결했어요`;xPrice()};
+    ['x_src','x_krw','x_jpy','x_cbase','x_oqty'].forEach(id=>$('#'+id).addEventListener('change',()=>xPrice()));return}
+  if(st.page==='batch'){renderB();$('#b_dir').onchange=e=>{B.items=groupFolder(e.target.files);renderB();$('#b_msg').textContent=`${B.items.length}개 상품 폴더를 찾았어요`};$('#b_tpl').onchange=()=>{B.tpl=$('#b_tpl').value;loadTpl()};if(!B.tplv)loadTpl();return}
+  if(st.page==='patch'){const s=$('#p_code');s.onchange=()=>{$('#p_code2').value=s.value};if(!E.loaded)return;renderOpts();renderGal();refreshE();
     document.querySelectorAll('[id^=e_],#o_name').forEach(e=>e.addEventListener('input',refreshE));
     $('#e_ItemDescription').addEventListener('paste',()=>setTimeout(()=>{if(!R.inv.rows.filter(r=>r&&r.value).length)aiOptions(true)},300));return}
   if(st.page!=='register')return;renderOpts();renderGal();refreshR();
