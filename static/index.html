@@ -82,6 +82,7 @@ main{padding:18px 16px 60px}.menu-btn{display:inline-block}}
   <div class="grp">상품</div>
   <nav>
     <a data-p="register">＋ 상품 등록</a>
+    <a data-p="patch">✎ 이미지·옵션 수정</a>
     <a data-p="reglog">✓ 등록 이력</a>
   </nav>
   <div class="grp">관리</div>
@@ -97,7 +98,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const PERIODS=[[1,'오늘'],[7,'최근 7일'],[30,'최근 30일'],[90,'최근 3개월'],[0,'전체']];
 let SUM=null;
 
-document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{if(st.page==='register')readR();st.page=a.dataset.p;st.q='';st.flag='';st.status='';location.hash=st.page;$('#side').classList.remove('open');render()});
+document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{swapState(st.page,a.dataset.p);st.page=a.dataset.p;st.q='';st.flag='';st.status='';location.hash=st.page;$('#side').classList.remove('open');render()});
 
 function head(t,d){return `<div class="head"><div><button class="btn menu-btn" onclick="side.classList.toggle('open')">☰</button>
 <h1>${t}</h1><div class="desc">${d}</div></div><div class="chips"><span class="desc" id="lastSync"></span>
@@ -201,14 +202,12 @@ const pages={
    ${F('AvailableDateValue','발송까지 영업일',{type:'number'})}
    ${F('IndustrialCode','JAN 코드',{ph:'있으면 입력'})}
   </div>
-  <div class="f wide" style="margin-top:12px"><label>옵션 (선택)</label><div id="opts"></div><button class="chip" onclick="addOpt()">+ 옵션 추가</button>
-   <div class="hint">예: カラー / ゴールド / 0 (추가금액 엔)</div></div></div>
+  </div>${optionBlock()}
 
   <div class="panel"><div class="step"><i>4</i>이미지</div><div class="form">
    <div class="f wide"><label>대표 이미지 <b>*</b></label><input type="file" accept="image/*" onchange="upImg(this,'main')"> <span class="hint">또는 URL:</span>
     <input id="r_StandardImage" placeholder="https://..." value="${esc(R.v.StandardImage||'')}" style="margin-top:6px"><div class="thumbs" id="mainThumb"></div></div>
-   <div class="f wide"><label>상세 이미지 (여러 장, 순서대로 상세페이지 하단에 들어가요)</label><input type="file" accept="image/*" multiple onchange="upImg(this,'detail')"><div class="thumbs" id="detThumbs"></div></div>
-  </div></div>
+  </div>${galleryBlock(true)}</div>
 
   <div class="panel"><div class="step"><i>5</i>상세페이지 · 최종 확인</div>
    <div class="grid2"><div class="f"><label>상세 HTML <b>*</b></label><textarea id="r_ItemDescription" style="min-height:420px;font-family:monospace;font-size:12px">${esc(R.v.ItemDescription||'')}</textarea></div>
@@ -217,6 +216,17 @@ const pages={
    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="confirm"> 위 내용을 확인했고 큐텐에 <b>${cfg.demo?'(데모) ':''}실제 등록</b>합니다</label>
    <div style="margin-top:12px"><button class="btn pri" id="regBtn" onclick="doRegister()">큐텐에 등록하기</button></div>
    <div id="regResult"></div></div>`},
+ async patch(){
+  const prods=await api('/api/products?days=90');
+  return head('이미지·옵션 수정','이미 등록된 상품에 추가이미지(갤러리)와 선택 옵션을 넣어요')+
+  `<div class="panel"><div class="step"><i>1</i>상품 선택</div><div class="form">
+    <div class="f wide"><label>상품 <b>*</b></label><select id="p_code"><option value="">— 선택 —</option>${prods.map(p=>`<option value="${esc(p.item_code)}" data-sc="${esc(p.seller_code||'')}" ${R.pcode===p.item_code?'selected':''}>${esc(p.item_code)} · ${esc(p.title||'')}</option>`).join('')}</select>
+    <div class="hint">목록에 없으면 동기화 후 다시 열거나, 아래에 상품번호를 직접 입력하세요</div></div>
+    <div class="f"><label>상품번호 직접 입력</label><input id="p_code2" placeholder="1219648670" value="${esc(R.pcode||'')}"></div></div></div>
+  <div class="panel"><div class="step"><i>2</i>추가이미지</div>${galleryBlock(false)}</div>
+  <div class="panel"><div class="step"><i>3</i>선택 옵션</div>${optionBlock()}</div>
+  <div class="panel"><div class="desc" style="margin-bottom:10px">비워 둔 항목은 바꾸지 않아요. 넣은 항목은 큐텐의 기존 추가이미지·옵션을 <b>덮어써요</b>.</div>
+   <button class="btn pri" id="patchBtn" onclick="doPatch()">큐텐에 적용하기</button><div id="patchResult"></div></div>`},
  async reglog(){
   const rows=await api('/api/registrations');
   return head('등록 이력','이 대시보드에서 큐텐에 등록한 상품 기록이에요')+
@@ -229,30 +239,65 @@ const pages={
    {k:'products',h:'상품',r:1},{k:'orders',h:'주문',r:1},{k:'message',h:'메시지',t:1}],'최근 50회')}
 };
 const DD=()=>SUM?.delay_days??3;
-const R={v:{ProductionPlaceType:'2',ProductionPlace:'KR',AvailableDateValue:'3',ShippingNo:'813346'},main:'',details:[],opts:[],cfg:{}};
+const R={v:{ProductionPlaceType:'2',ProductionPlace:'KR',AvailableDateValue:'3',ShippingNo:'813346'},gallery:[],toDesc:false,inv:{name:'',rows:[]},pcode:'',cfg:{}};
 const RKEYS=['clone','SecondSubCat','ShippingNo','ContactInfo','name_ko','keywords','features','spec','usage','ItemTitle','PromotionName','Keyword','SellerCode','ItemPrice','RetailPrice','ItemQty','Weight','ProductionPlaceType','ProductionPlace','AvailableDateValue','IndustrialCode','StandardImage','ItemDescription'];
-function readR(){RKEYS.forEach(k=>{const e=$('#r_'+k);if(e)R.v[k]=e.value});document.querySelectorAll('.optrow').forEach((r,i)=>{const [a,b,c]=r.querySelectorAll('input');R.opts[i]=[a.value,b.value,c.value]})}
-function fullDesc(){return (R.v.ItemDescription||'')+R.details.map(u=>`<p><img src="${u}" style="max-width:100%"></p>`).join('')}
+function readR(){RKEYS.forEach(k=>{const e=$('#r_'+k);if(e)R.v[k]=e.value});
+  if($('#o_name'))R.inv.name=$('#o_name').value;if($('#toDesc'))R.toDesc=$('#toDesc').checked;
+  document.querySelectorAll('.optrow').forEach((r,i)=>{const [a,b,c,d]=r.querySelectorAll('input');R.inv.rows[i]={value:a.value,price:b.value,qty:c.value,code:d.value}});
+  if($('#p_code2'))R.pcode=$('#p_code2').value.trim()}
+const STORE={};
+function swapState(from,to){if(from===to)return;if(['register','patch'].includes(from)){readR();STORE[from]={gallery:R.gallery,inv:R.inv}}
+  if(['register','patch'].includes(to)){const s=STORE[to]||{gallery:[],inv:{name:'',rows:[]}};R.gallery=s.gallery;R.inv=s.inv}}
+function galleryBlock(withDesc){return `<div class="f wide" style="margin-top:12px"><label>추가이미지 (갤러리 · 최대 50장, 올린 순서대로 노출)</label>
+  <input type="file" accept="image/*" multiple onchange="upImg(this,'gallery')"><div class="thumbs" id="galThumbs"></div>
+  <div class="hint">큐텐 권장: 800×800px, 흰 배경 · 드래그 대신 ◀▶ 버튼으로 순서 변경</div>
+  ${withDesc?`<label style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:13px;color:var(--text)"><input type="checkbox" id="toDesc" ${R.toDesc?'checked':''} style="width:auto"> 상세 HTML 하단에도 같은 이미지 넣기</label>`:''}</div>`}
+function optionBlock(){return `<div class="f wide" style="margin-top:12px"><label>선택 옵션 (재고별 · 예: 選べる20種 A~T)</label>
+  <div class="form" style="grid-template-columns:220px 1fr auto;align-items:end">
+   <div class="f"><label>옵션 이름</label><input id="o_name" placeholder="デザイン" value="${esc(R.inv.name)}"></div>
+   <div class="f"><label>값 한꺼번에 입력 (한 줄에 하나)</label><textarea id="o_bulk" style="min-height:44px" placeholder="A.スワール&#10;B.パール&#10;C.ハート"></textarea></div>
+   <div class="f"><label>옵션당 재고</label><div style="display:flex;gap:6px"><input id="o_qty" type="number" value="10" style="width:80px"><button class="chip" onclick="bulkOpt()">목록 만들기</button></div></div></div>
+  <div style="display:grid;grid-template-columns:1fr 110px 90px 140px 32px;gap:6px;font-size:11px;color:var(--sub);margin:10px 0 4px"><span>옵션 값</span><span>추가금액(엔)</span><span>재고</span><span>옵션 코드(선택)</span><span></span></div>
+  <div id="opts"></div><button class="chip" onclick="addOpt()">+ 한 줄 추가</button>
+  <div class="hint" id="optSum"></div></div>`}
+function fullDesc(){return (R.v.ItemDescription||'')+(R.toDesc?R.gallery.map(u=>`<p><img src="${u}" style="max-width:100%"></p>`).join(''):'')}
 function buildParams(){readR();const v=R.v,p={SecondSubCat:v.SecondSubCat,ItemTitle:v.ItemTitle,PromotionName:v.PromotionName,SellerCode:v.SellerCode,
   ProductionPlaceType:v.ProductionPlaceType,ProductionPlace:v.ProductionPlaceType==='2'?v.ProductionPlace:'',AdultYN:'N',ContactInfo:v.ContactInfo,
   StandardImage:v.StandardImage,ItemDescription:fullDesc(),RetailPrice:v.RetailPrice,ItemPrice:v.ItemPrice,ItemQty:v.ItemQty,ShippingNo:v.ShippingNo,
   AvailableDateType:'0',AvailableDateValue:v.AvailableDateValue,Weight:v.Weight,Keyword:v.Keyword};
   if(v.IndustrialCode){p.IndustrialCodeType='J';p.IndustrialCode=v.IndustrialCode}
-  const o=R.opts.filter(x=>x&&x[0]&&x[1]);if(o.length)p.AdditionalOption=o.map(([n,val,pr])=>`${n}||*${val}||*${pr||0}`).join('$$');return p}
+  const rows=R.inv.rows.filter(r=>r&&r.value);if(rows.length)p.ItemQty=String(rows.reduce((a,r)=>a+(+r.qty||0),0));return p}
+function invPayload(){return {name:R.inv.name||'オプション',rows:R.inv.rows.filter(r=>r&&r.value)}}
 function refreshR(){readR();const v=R.v,pv=$('#pv');if(!pv)return;pv.innerHTML=fullDesc()||'<div class="desc">상세 HTML을 입력하거나 AI 초안을 만들어 주세요</div>';
   $('#tlen').textContent=`${[...(v.ItemTitle||'')].length}자 ·`;
   $('#disc').textContent=v.RetailPrice&&v.ItemPrice?`할인율 ${Math.round((1-v.ItemPrice/v.RetailPrice)*100)}%`:'';
   $('#mainThumb').innerHTML=v.StandardImage?`<div><img src="${esc(v.StandardImage)}"></div>`:'';
-  $('#detThumbs').innerHTML=R.details.map((u,i)=>`<div><img src="${u}"><button onclick="R.details.splice(${i},1);refreshR()">✕</button></div>`).join('');
   const p=buildParams(),miss=['SecondSubCat','ItemTitle','SellerCode','ContactInfo','StandardImage','ItemDescription','ItemPrice','ItemQty','ShippingNo'].filter(k=>!p[k]);
   $('#sum').innerHTML=[['상품명',p.ItemTitle],['셀러코드',p.SellerCode],['가격',p.ItemPrice?`${won(p.ItemPrice)} (정가 ${p.RetailPrice?won(p.RetailPrice):'-'})`:''],['재고',p.ItemQty],
-   ['카테고리',p.SecondSubCat],['배송 템플릿',p.ShippingNo],['옵션',p.AdditionalOption||'없음'],['빠진 필수 항목',miss.length?`<b class="red">${miss.join(', ')}</b>`:'<b class="green">없음</b>']]
+   ['카테고리',p.SecondSubCat],['배송 템플릿',p.ShippingNo],['추가이미지',R.gallery.length+'장'],['선택 옵션',R.inv.rows.filter(r=>r&&r.value).length?`${esc(R.inv.name||'オプション')} ${R.inv.rows.filter(r=>r&&r.value).length}개 (재고 합계 ${p.ItemQty})`:'없음'],['빠진 필수 항목',miss.length?`<b class="red">${miss.join(', ')}</b>`:'<b class="green">없음</b>']]
    .map(([a,b])=>`<tr><td>${a}</td><td>${b&&String(b).startsWith('<b')?b:esc(b||'')}</td></tr>`).join('')}
-function renderOpts(){$('#opts').innerHTML=R.opts.map((o,i)=>`<div class="optrow"><input placeholder="옵션명 カラー" value="${esc(o[0])}"><input placeholder="값 ゴールド" value="${esc(o[1])}"><input type="number" placeholder="추가금" value="${esc(o[2])}"><button class="chip" onclick="readR();R.opts.splice(${i},1);renderOpts();refreshR()">✕</button></div>`).join('')}
-window.addOpt=()=>{readR();R.opts.push(['','','0']);renderOpts()};
+function renderOpts(){const o=$('#opts');if(!o)return;o.innerHTML=R.inv.rows.map((r,i)=>`<div class="optrow" style="grid-template-columns:1fr 110px 90px 140px 32px"><input placeholder="A.スワール" value="${esc(r.value)}"><input type="number" value="${esc(r.price||0)}"><input type="number" value="${esc(r.qty||0)}"><input placeholder="WBL-A" value="${esc(r.code||'')}"><button class="chip" onclick="readR();R.inv.rows.splice(${i},1);renderOpts();refreshAll()">✕</button></div>`).join('');
+  o.querySelectorAll('input').forEach(e=>e.addEventListener('input',refreshAll));
+  const rs=R.inv.rows.filter(r=>r&&r.value);$('#optSum').textContent=rs.length?`${rs.length}개 옵션 · 재고 합계 ${rs.reduce((a,r)=>a+(+r.qty||0),0)}개 (상품 재고는 이 합계로 자동 설정돼요)`:'옵션 없이 등록하려면 비워 두세요'}
+function renderGal(){const g=$('#galThumbs');if(!g)return;g.innerHTML=R.gallery.map((u,i)=>`<div><img src="${u}"><button onclick="R.gallery.splice(${i},1);refreshAll()">✕</button>
+  <div style="display:flex;justify-content:space-between;margin-top:2px">${i?`<a class="chip" style="padding:0 6px" onclick="mv(${i},-1)">◀</a>`:'<span></span>'}<span class="hint">${i+1}</span>${i<R.gallery.length-1?`<a class="chip" style="padding:0 6px" onclick="mv(${i},1)">▶</a>`:'<span></span>'}</div></div>`).join('')}
+window.mv=(i,d)=>{const g=R.gallery;[g[i],g[i+d]]=[g[i+d],g[i]];refreshAll()};
+function refreshAll(){readR();renderGal();if(st.page==='register')refreshR();else{const rs=R.inv.rows.filter(r=>r&&r.value);if($('#optSum'))$('#optSum').textContent=rs.length?`${rs.length}개 옵션 · 재고 합계 ${rs.reduce((a,r)=>a+(+r.qty||0),0)}개`:''}}
+window.addOpt=()=>{readR();R.inv.rows.push({value:'',price:0,qty:$('#o_qty')?.value||10,code:''});renderOpts();refreshAll()};
+window.bulkOpt=()=>{readR();const q=$('#o_qty').value||10;$('#o_bulk').value.split('\n').map(x=>x.trim()).filter(Boolean).forEach(v=>R.inv.rows.push({value:v,price:0,qty:q,code:''}));$('#o_bulk').value='';renderOpts();refreshAll()};
+window.doPatch=async()=>{readR();const sel=$('#p_code'),code=R.pcode||sel.value;if(!code){alert('상품을 선택하거나 상품번호를 입력해 주세요');return}
+  const sc=sel.selectedOptions[0]?.dataset.sc||'';const inv=invPayload();if(!R.gallery.length&&!inv.rows.length){alert('추가이미지나 옵션을 넣어 주세요');return}
+  if(!confirm(`상품 ${code}의 ${R.gallery.length?'추가이미지 '+R.gallery.length+'장':''} ${inv.rows.length?'옵션 '+inv.rows.length+'개':''}를 큐텐에 덮어써요. 진행할까요?`))return;
+  const b=$('#patchBtn');b.disabled=true;b.textContent='적용 중…';
+  try{const r=await fetch(`/api/items/${code}/patch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seller_code:sc,gallery:R.gallery,options:inv})});const j=await r.json();
+   $('#patchResult').innerHTML=!r.ok?`<div class="result ng">${esc(j.detail)}</div>`:stepResult(j)}catch(e){$('#patchResult').innerHTML=`<div class="result ng">${esc(e.message)}</div>`}
+  b.disabled=false;b.textContent='큐텐에 적용하기'};
+function stepResult(j){const line=(t,x)=>x==null?'':`<div>${x.ResultCode==0||x.ResultCode==='0'?'✅':'❌'} ${t}: ${esc(x.ResultMsg||x.ErrorMsg||'')}</div>`;
+  const allOk=[j.gallery,j.options].every(x=>x==null||String(x.ResultCode)==='0');
+  return `<div class="result ${allOk?'ok':'ng'}">${line('추가이미지',j.gallery)}${line('선택 옵션',j.options)}<details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify({gallery:j.gallery,options:j.options},null,1))}</pre></details></div>`}
 window.upImg=async(inp,kind)=>{for(const f of inp.files){const fd=new FormData();fd.append('file',f);
   const r=await fetch('/api/images',{method:'POST',body:fd});const j=await r.json();if(!r.ok){alert(j.detail);continue}
-  if(kind==='main'){$('#r_StandardImage').value=j.url}else R.details.push(j.url)}inp.value='';refreshR()};
+  if(kind==='main'){$('#r_StandardImage').value=j.url}else R.gallery.push(j.url)}inp.value='';refreshAll()};
 window.aiDraft=async()=>{readR();if(!R.v.name_ko){alert('한국어 상품명을 입력해 주세요');return}
   const b=$('#aiBtn');b.disabled=true;$('#aiMsg').textContent='일본어 초안을 쓰는 중이에요… (20~40초)';
   try{const r=await fetch('/api/ai/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name_ko:R.v.name_ko,features:R.v.features,spec:R.v.spec,usage:R.v.usage,keywords:R.v.keywords})});
@@ -269,10 +314,11 @@ async function cloneFrom(code){if(!code)return;$('#cloneRaw').textContent='불�
   catch(e){$('#cloneRaw').textContent='불러오기 실패: '+e.message}refreshR()}
 window.doRegister=async()=>{const p=buildParams(),b=$('#regBtn');if(!$('#confirm').checked){alert('최종 확인에 체크해 주세요');return}
   b.disabled=true;b.textContent='등록 중…';
-  try{const r=await fetch('/api/items/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({params:p,confirm:true})});const j=await r.json();
-   $('#regResult').innerHTML=!r.ok?`<div class="result ng">등록 전 확인 필요: ${esc(j.detail)}</div>`:j.ok?`<div class="result ok"><b>등록 성공</b> — 상품번호 ${esc(j.gd_no)}. QSM에서 노출 상태를 확인해 주세요.</div>`:`<div class="result ng"><b>큐텐이 거절했어요</b>: ${esc(j.message)}<details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify(j.raw,null,1))}</pre></details></div>`}
+  try{const r=await fetch('/api/items/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({params:p,confirm:true,gallery:R.gallery,options:invPayload()})});const j=await r.json();
+   $('#regResult').innerHTML=!r.ok?`<div class="result ng">등록 전 확인 필요: ${esc(j.detail)}</div>`:j.ok?`<div class="result ok"><b>등록 성공</b> — 상품번호 ${esc(j.gd_no)}. QSM에서 노출 상태를 확인해 주세요.</div>${(j.gallery||j.options)?stepResult(j):''}`:`<div class="result ng"><b>큐텐이 거절했어요</b>: ${esc(j.message)}<details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify(j.raw,null,1))}</pre></details></div>`}
   catch(e){$('#regResult').innerHTML=`<div class="result ng">${esc(e.message)}</div>`}b.disabled=false;b.textContent='큐텐에 등록하기'};
-function bindRegister(){if(st.page!=='register')return;renderOpts();refreshR();
+function bindRegister(){if(st.page==='patch'){renderOpts();renderGal();const s=$('#p_code');s.onchange=()=>{$('#p_code2').value=s.value;R.pcode=s.value};$('#p_code2').oninput=()=>R.pcode=$('#p_code2').value.trim();$('#o_name').oninput=readR;return}
+  if(st.page!=='register')return;renderOpts();renderGal();refreshR();$('#toDesc').onchange=refreshAll;$('#o_name').oninput=refreshAll;
   document.querySelectorAll('[id^=r_]').forEach(e=>{e.addEventListener('input',refreshR);e.addEventListener('change',refreshR)});
   $('#r_clone').onchange=e=>{R.v.clone=e.target.value;cloneFrom(e.target.value)}}
 window.go=p=>{st.page=p;location.hash=p;render()};
@@ -288,7 +334,7 @@ async function render(keepFocus){
   }catch(e){$('#main').innerHTML=`<div class="empty">불러오지 못했어요 (${e.message})</div>`}
   bindSearch();bindRegister();if(keepFocus&&$('#q')){$('#q').focus();$('#q').setSelectionRange(pos,pos)}
 }
-window.addEventListener('hashchange',()=>{const p=location.hash.slice(1);if(pages[p]&&p!==st.page){st.page=p;st.q='';st.flag='';st.status='';render()}});
+window.addEventListener('hashchange',()=>{const p=location.hash.slice(1);if(pages[p]&&p!==st.page){swapState(st.page,p);st.page=p;st.q='';st.flag='';st.status='';render()}});
 if(!pages[st.page])st.page='home';
 render();
 </script>
