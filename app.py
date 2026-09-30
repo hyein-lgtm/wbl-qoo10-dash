@@ -402,16 +402,18 @@ class OptIn(BaseModel):
     item_code: str = ""
 
 
-OPT_SYSTEM = """あなたはQoo10 Japanの出品担当者です。商品詳細ページ(HTMLテキストと画像)から、購入者が選ぶ「選択肢(バリエーション)」を抽出します。
-- 例: 「選べる20種」のデザイン一覧、カラー、サイズ、セット内容の選択など。
-- 表記はページに書かれている通りに(記号・番号・カタカナを変えない)。例: "A.スワール" のように記号+名前がある場合はそのまま。
-- 選択肢でないもの(特徴、使い方、注意事項、成分)は含めない。
-- オプション名はページの表記を優先(なければ「デザイン」「カラー」など適切な日本語)。
-- 重要: 1つの番号(例: A)に複数のカラー・サイズ・タイプがある場合は、1つにまとめず【色ごとに別の値】として展開する。
-  例: 「A.スワール(ゴールド/シルバー)」→ "A.スワール ゴールド", "A.スワール シルバー" の2つ。
-  番号+名前の後ろに半角スペース+色名、の形で統一する。色名はページ表記どおり。
-- 見つからない場合は values を空配列に。
-必ず次のJSONだけを出力: {"name":"","values":[],"found_in":"text|image|none","note":""}"""
+OPT_SYSTEM = """あなたはQoo10 Japanの出品担当者です。商品詳細ページ(HTMLテキストと画像)から、購入者が選ぶ選択肢(バリエーション)を抽出します。
+このショップの詳細ページは次の構成が多い:
+- 商品ごとのセクション見出し「01 シンプル シャイン」のように【番号 + 商品名】
+- そのセクション内の「色」欄に、選択肢ラベル「A (シルバー)」「D (ゴールド)」のように【英字コード + (色)】
+- 1商品に色が複数あれば英字コードも複数(例: 01 シンプルシャイン → A=シルバー, D=ゴールド)。色がない商品はコード1つ。
+やること:
+- 英字コードごとに1件ずつ、それが属する商品名(見出し)と番号、色を対応付ける。
+- 商品名・色はページ表記どおり(カタカナを変えない)。商品名内のスペースは詰めてよい。
+- 選択肢でないもの(特徴、使い方、注意事項)は含めない。英字コードが無いページでは code を空にして商品・色ごとに1件。
+- オプション名はページ表記を優先(なければ「デザイン」)。
+必ず次のJSONだけを出力:
+{"name":"デザイン","items":[{"code":"A","no":"01","product":"シンプルシャイン","color":"シルバー"}],"found_in":"image|text|none","note":""}"""
 
 
 def _strip_html(h):
@@ -443,31 +445,40 @@ def ai_options(d: OptIn):
             imgs.append(u)
     text = _strip_html(html)[:6000]
     best, notes = None, []
-    batches = [imgs[i:i + 20] for i in range(0, min(len(imgs), 60), 20)] or [[]]
-    for batch in batches:
-        content = [{"type": "text", "text": f"詳細ページのテキスト:\n{text or '(なし)'}\n\n以下は詳細ページの画像です(順番通り)。"}]
-        content += [{"type": "image", "source": {"type": "url", "url": u}} for u in batch]
-        r = rq.post("https://api.anthropic.com/v1/messages", timeout=120,
-                    headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": AI_MODEL, "max_tokens": 1500, "system": OPT_SYSTEM,
-                          "messages": [{"role": "user", "content": content}]})
-        if r.status_code != 200:
-            notes.append(f"AI 호출 실패 {r.status_code}: {r.text[:200]}")
+    fmt = os.getenv("OPTION_FORMAT", "{code}.{product} {color}")
+    content = [{"type": "text", "text": f"詳細ページのテキスト:\n{text or '(なし)'}\n\n以下は詳細ページの画像です(上から順番通り。見出しと色ラベルが別の画像に分かれていることがあります)。"}]
+    content += [{"type": "image", "source": {"type": "url", "url": u}} for u in imgs[:90]]
+    r = rq.post("https://api.anthropic.com/v1/messages", timeout=240,
+                headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": AI_MODEL, "max_tokens": 4000, "system": OPT_SYSTEM,
+                      "messages": [{"role": "user", "content": content}]})
+    if r.status_code != 200:
+        raise HTTPException(502, f"AI 호출 실패 {r.status_code}: {r.text[:300]}")
+    t = "".join(b.get("text", "") for b in r.json().get("content", []))
+    try:
+        j = json.loads(t[t.index("{"): t.rindex("}") + 1])
+    except ValueError:
+        raise HTTPException(502, "AI 응답 해석 실패: " + t[:200])
+    items = j.get("items") or [{"code": "", "product": v, "color": ""} for v in j.get("values", [])]
+    seen, rows = set(), []
+    for it in items:
+        code = str(it.get("code") or "").strip().upper()
+        key = code or (it.get("product", ""), it.get("color", ""))
+        if key in seen:
             continue
-        t = "".join(b.get("text", "") for b in r.json().get("content", []))
-        try:
-            j = json.loads(t[t.index("{"): t.rindex("}") + 1])
-        except ValueError:
-            notes.append("AI 응답 해석 실패")
-            continue
-        if j.get("values") and (not best or len(j["values"]) > len(best["values"])):
-            best = j
-        if best and len(best["values"]) >= 2:
-            break
-    if not best:
-        return {"name": "", "values": [], "found_in": "none", "note": " / ".join(notes) or "옵션을 찾지 못했어요", "images": len(imgs)}
-    best["images"] = len(imgs)
-    return best
+        seen.add(key)
+        prod = str(it.get("product") or "").replace(" ", "").replace("\u3000", "")
+        color = str(it.get("color") or "").strip()
+        if code:
+            v = fmt.format(code=code, no=it.get("no", ""), product=prod, color=color).strip()
+        else:
+            v = f"{prod} {color}".strip()
+        v = v.replace(" ()", "").replace("  ", " ").rstrip(". ")
+        rows.append({"sort": (code == "", code, str(it.get("no", ""))), "value": v, **it})
+    rows.sort(key=lambda x: x["sort"])
+    return {"name": j.get("name") or "デザイン", "values": [x["value"] for x in rows],
+            "items": [{k: v for k, v in x.items() if k != "sort"} for x in rows],
+            "found_in": j.get("found_in", "image"), "note": j.get("note", ""), "images": len(imgs)}
 
 
 class PriceMapIn(BaseModel):
