@@ -423,6 +423,34 @@ def _strip_html(h):
     return re.sub(r"\s+", " ", _h.unescape(t)).strip()
 
 
+def _image_tiles(urls, width=1000, tile_h=1400, overlap=120):
+    """이미지를 받아 가로 1000px로 줄이고, 세로로 긴 것은 1400px씩 잘라 base64 JPEG 목록으로."""
+    import base64, io, requests as rq
+    from PIL import Image
+    out = []
+    for u in urls:
+        try:
+            raw = rq.get(u, timeout=20, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.qoo10.jp/"}).content
+            im = Image.open(io.BytesIO(raw))
+            im.seek(0)
+            im = im.convert("RGB")
+        except Exception:
+            continue
+        if im.width > width:
+            im = im.resize((width, max(1, round(im.height * width / im.width))))
+        y = 0
+        while y < im.height:
+            part = im.crop((0, y, im.width, min(im.height, y + tile_h)))
+            if part.height > 40:
+                buf = io.BytesIO()
+                part.save(buf, "JPEG", quality=80)
+                out.append(base64.b64encode(buf.getvalue()).decode())
+            if y + tile_h >= im.height:
+                break
+            y += tile_h - overlap
+    return out
+
+
 @app.post("/api/ai/options", dependencies=[Depends(auth)])
 def ai_options(d: OptIn):
     import re, requests as rq
@@ -446,20 +474,41 @@ def ai_options(d: OptIn):
     text = _strip_html(html)[:6000]
     best, notes = None, []
     fmt = os.getenv("OPTION_FORMAT", "{code}.{product} {color}")
-    content = [{"type": "text", "text": f"詳細ページのテキスト:\n{text or '(なし)'}\n\n以下は詳細ページの画像です(上から順番通り。見出しと色ラベルが別の画像に分かれていることがあります)。"}]
-    content += [{"type": "image", "source": {"type": "url", "url": u}} for u in imgs[:90]]
-    r = rq.post("https://api.anthropic.com/v1/messages", timeout=240,
-                headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": AI_MODEL, "max_tokens": 4000, "system": OPT_SYSTEM,
-                      "messages": [{"role": "user", "content": content}]})
-    if r.status_code != 200:
-        raise HTTPException(502, f"AI 호출 실패 {r.status_code}: {r.text[:300]}")
-    t = "".join(b.get("text", "") for b in r.json().get("content", []))
-    try:
-        j = json.loads(t[t.index("{"): t.rindex("}") + 1])
-    except ValueError:
-        raise HTTPException(502, "AI 응답 해석 실패: " + t[:200])
+    tiles = _image_tiles(imgs[:80])  # 긴 상세 이미지를 잘라서 AI 크기 제한(2000px)을 피함
+    if not tiles and not text:
+        raise HTTPException(400, "읽을 수 있는 상세 이미지가 없어요")
+    # 요청 크기 제한 대비: 이미지 조각 70개 또는 약 18MB씩 나눠서 순서대로 읽음 (앞 묶음 끝 3장은 겹쳐서 연결 유지)
+    chunks, cur, size = [], [], 0
+    for tl in tiles:
+        if cur and (len(cur) >= 70 or size + len(tl) > 18_000_000):
+            chunks.append(cur); cur = cur[-3:]; size = sum(map(len, cur))
+        cur.append(tl); size += len(tl)
+    if cur or not chunks:
+        chunks.append(cur)
+    items, name, notes = [], "", []
+    for n, ch in enumerate(chunks, 1):
+        content = [{"type": "text", "text": f"詳細ページのテキスト:\n{text or '(なし)'}\n\n以下は詳細ページの画像です(上から順番通り、長い画像は分割済み。{n}/{len(chunks)}部分)。見出しと色ラベルが別の画像に分かれていることがあります。"}]
+        content += [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b}} for b in ch]
+        r = rq.post("https://api.anthropic.com/v1/messages", timeout=300,
+                    headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={"model": AI_MODEL, "max_tokens": 4000, "system": OPT_SYSTEM,
+                          "messages": [{"role": "user", "content": content}]})
+        if r.status_code != 200:
+            notes.append(f"{n}번째 묶음 실패 {r.status_code}: {r.text[:200]}")
+            continue
+        t = "".join(b.get("text", "") for b in r.json().get("content", []))
+        try:
+            jj = json.loads(t[t.index("{"): t.rindex("}") + 1])
+        except ValueError:
+            notes.append(f"{n}번째 묶음 응답 해석 실패")
+            continue
+        name = name or jj.get("name", "")
+        items += jj.get("items") or [{"code": "", "product": v, "color": ""} for v in jj.get("values", [])]
+    if not items and notes:
+        raise HTTPException(502, " / ".join(notes))
+    j = {"name": name, "items": items, "found_in": "image", "note": " / ".join(notes)}
     items = j.get("items") or [{"code": "", "product": v, "color": ""} for v in j.get("values", [])]
+    items.sort(key=lambda it: 0 if it.get("product") else 1)  # 같은 코드면 상품명 있는 쪽 우선
     seen, rows = set(), []
     for it in items:
         code = str(it.get("code") or "").strip().upper()
