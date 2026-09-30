@@ -585,6 +585,233 @@ def ai_price_map(d: PriceMapIn):
     return {"ratio": ratio, "rows": out}
 
 
+# ── 폴더 일괄 등록 ─────────────────────────────────────
+FX = float(os.getenv("FX_KRW_PER_JPY", "9.3"))  # 정가 표시용 환율 (100엔=930원)
+_MALL_CACHE = {}
+
+
+def _ai(system, user_content, max_tokens=2000):
+    import requests as rq
+    if not AI_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY가 없어요")
+    r = rq.post("https://api.anthropic.com/v1/messages", timeout=180,
+                headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": AI_MODEL, "max_tokens": max_tokens, "system": system,
+                      "messages": [{"role": "user", "content": user_content}]})
+    if r.status_code != 200:
+        raise HTTPException(502, f"AI 호출 실패 {r.status_code}: {r.text[:200]}")
+    t = "".join(b.get("text", "") for b in r.json().get("content", []))
+    try:
+        return json.loads(t[t.index("{"): t.rindex("}") + 1])
+    except ValueError:
+        raise HTTPException(502, "AI 응답 해석 실패: " + t[:200])
+
+
+def _mall_text(url):
+    """자사몰 목록 페이지 → 상품번호 표시가 남은 텍스트 (10분 캐시)"""
+    import re, requests as rq
+    hit = _MALL_CACHE.get(url)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    page = rq.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"}).text
+    page = re.sub(r"""<a[^>]+product_no=(\d+)[^>]*>""", r" [#\1] ", page)
+    text = _strip_html(page)[:20000]
+    _MALL_CACHE[url] = (time.time(), text)
+    return text
+
+
+class BatchPriceIn(BaseModel):
+    folder: str                      # 폴더 이름 (상품번호·한국어 이름 포함 가능)
+    values: list = []                # 옵션 값 (없으면 단품)
+    url: str = "https://wblbeauty.com/product/list.html?cate_no=1105"
+    base_krw: float = 17900
+    base_jpy: float = 2400
+
+
+BATCH_PRICE_SYSTEM = """あなたは日韓EC担当者です。韓国自社モールの商品一覧テキスト([#番号]が商品番号)から価格を探します。
+対象: (1) フォルダ名が指す商品 (2) 各オプション(日本語)が指す商品。
+- フォルダ名に商品番号(例 7663)があればその番号の商品。なければ名前で最も近い商品。
+- オプションは名前の意味・モチーフで対応(スワール=스왈, パール=진주, ハート=하트, リボン=리본, 蝶=나비, クローバー=클로버, フラワー=플라워 等)。
+- price は割引後の「판매가」、consumer は「소비자가」(取り消し線の高い方)。
+必ず次のJSONだけを出力:
+{"main":{"no":"","kr_name":"","price":0,"consumer":0},"options":[{"i":1,"kr_name":"","price":0,"confidence":"high|mid|low"}]}"""
+
+
+@app.post("/api/batch/price", dependencies=[Depends(auth)])
+def batch_price(d: BatchPriceIn):
+    try:
+        text = _mall_text(d.url)
+    except Exception as e:
+        raise HTTPException(502, f"자사몰 페이지를 가져오지 못했어요: {e}")
+    vals = [str(v) for v in d.values if str(v).strip()]
+    user = f"フォルダ名: {d.folder}\nオプション:\n" + ("\n".join(f"{i}. {v}" for i, v in enumerate(vals, 1)) or "(なし)") + f"\n\n商品一覧:\n{text}"
+    j = _ai(BATCH_PRICE_SYSTEM, user, 3000)
+    ratio = d.base_jpy / d.base_krw
+    to_jpy = lambda krw: int(round(krw * ratio / 10) * 10)
+    main = j.get("main") or {}
+    opts = []
+    for o in j.get("options", []):
+        i = int(o.get("i", 0)) - 1
+        if 0 <= i < len(vals):
+            kp = num(o.get("price") or 0)
+            opts.append({"value": vals[i], "kr_name": o.get("kr_name", ""), "kr_price": kp,
+                         "jpy": to_jpy(kp) if kp else None, "confidence": o.get("confidence", "low")})
+    priced = [o["jpy"] for o in opts if o["jpy"]]
+    item_price = min(priced) if priced else (to_jpy(num(main.get("price") or 0)) if main.get("price") else None)
+    for o in opts:  # 판매가 = 최저 옵션가, 나머지는 추가금 (±50% 상한)
+        if o["jpy"] and item_price:
+            add = o["jpy"] - item_price
+            cap = int(item_price * 0.5 // 10 * 10)
+            o["add"], o["over_cap"] = min(add, cap), add > cap
+        else:
+            o["add"], o["over_cap"] = 0, False
+    consumer = num(main.get("consumer") or 0)
+    retail = int(consumer / FX // 100 * 100) if consumer else ""  # 정가: 소비자가 환율 환산 이하(경표법)
+    if retail and item_price and retail <= item_price:
+        retail = ""
+    return {"main": main, "item_price": item_price, "retail_price": retail, "options": opts, "ratio": ratio}
+
+
+class TitleIn(BaseModel):
+    name_ko: str
+    options: list = []
+    keywords: str = ""
+
+
+TITLE_SYSTEM = """あなたはQoo10 Japanの出品担当です。ショップ「wbL公式」の商品名を作ります。
+形式: 「wbL 純正品 耳つぼジュエリー {デザイン名(カタカナ、詳細ページ表記)} {モチーフ・素材の検索語1〜2個} 貼るだけ ピアス穴不要」
+- 全角50文字以内。オプションが複数なら「選べる{N}種」を入れる(Nは実際の数)。
+- 薬機法・景表法に触れる語(小顔、痩せる、効果、No.1、最安)は禁止。
+- promotion は【】付き全角12文字以内、効能表現なし。
+必ず次のJSONだけを出力: {"title":"","promotion":""}"""
+
+
+@app.post("/api/ai/title", dependencies=[Depends(auth)])
+def ai_title(d: TitleIn):
+    opts = [str(o) for o in d.options if str(o).strip()]
+    user = f"韓国語の商品名/フォルダ名: {d.name_ko}\nオプション({len(opts)}件): {' / '.join(opts[:30]) or 'なし'}\n入れたい語: {d.keywords}"
+    return _ai(TITLE_SYSTEM, user, 500)
+
+
+# ── 정리표(엑셀) 일괄 등록 ────────────────────────────────
+# 자사몰 판매가·소비자가 (2026-09-30 wblbeauty.com cate_no=1105 기준). /api/mall/prices?refresh=1 로 갱신
+MALL_DEFAULT = {
+    "7677": (12900, 19900), "7031": (21900, 36900), "7236": (22900, 29900), "7201": (19900, 28900), "7778": (22900, 40900),
+    "7780": (22900, 37900), "7779": (22900, 40900), "7188": (12900, 19900), "7257": (26900, 37900), "7439": (20900, 36900),
+    "7235": (26900, 34900), "7191": (24900, 33900), "7341": (25900, 45900), "7187": (17900, 26400), "7662": (21900, 43900),
+    "7663": (20900, 30900), "7313": (24900, 33900), "7777": (22900, 37900), "7297": (26900, 34900), "7221": (14900, 23900),
+    "7395": (29900, 49900), "7225": (6900, 12900), "7661": (21900, 37900), "7189": (18400, 26900), "7247": (17900, 25900),
+    "7242": (17900, 25900), "7314": (25900, 33900), "7658": (24900, 39900), "7776": (24900, 42900), "7305": (23900, 31900),
+    "7344": (22900, 39900), "7659": (21900, 35900), "7660": (20900, 34900), "7375": (19900, 35900), "7433": (23900, 45900),
+    "7343": (22900, 39900), "7190": (19900, 26900), "7345": (21900, 39900), "7306": (22900, 39900), "7296": (26900, 34900),
+    "7307": (26900, 34900), "7200": (4900, 9900)}
+_MALL_LIVE = {}
+
+
+@app.get("/api/mall/prices", dependencies=[Depends(auth)])
+def mall_prices(refresh: bool = False, url: str = "https://wblbeauty.com/product/list.html?cate_no=1105"):
+    if refresh:
+        text = _mall_text(url)
+        j = _ai("韓国モールの商品一覧テキストから、[#番号]ごとに販売価格(割引後)と消費者価格を抜き出す。"
+                "必ずJSONのみ: {\"items\":[{\"no\":\"7663\",\"price\":20900,\"consumer\":30900}]}", text, 4000)
+        _MALL_LIVE.clear()
+        _MALL_LIVE.update({str(i["no"]): (num(i.get("price")), num(i.get("consumer"))) for i in j.get("items", []) if i.get("no")})
+    src = _MALL_LIVE or MALL_DEFAULT
+    return {"source": "live" if _MALL_LIVE else "default(2026-09-30)", "fx": FX,
+            "prices": {k: {"price": v[0], "consumer": v[1]} for k, v in src.items()}}
+
+
+def _hdr(row):
+    return [str(c or "").strip() for c in row]
+
+
+def _col(h, *names):
+    for n in names:
+        for i, x in enumerate(h):
+            if x == n or x.startswith(n):
+                return i
+    return None
+
+
+@app.post("/api/sheet/parse", dependencies=[Depends(auth)])
+async def sheet_parse(file: UploadFile = File(...)):
+    import io, re
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(await file.read()), data_only=True, read_only=True)
+    S = lambda n: [r for r in wb[n].iter_rows(values_only=True) if any(v not in (None, "") for v in r)] if n in wb.sheetnames else []
+    v = lambda r, i: ("" if i is None or i >= len(r) or r[i] is None else str(r[i]).strip())
+    split = lambda s: [x.strip() for x in re.split(r"\s*(?:\n|\$\$| / |／)\s*", s or "") if x.strip()]
+    items = []
+    # QSM 초안: 상품명 → 상세 HTML
+    qsm = {}
+    rows = S("QSM일괄등록_초안")
+    if rows:
+        h = _hdr(rows[0]); ci, cd, cm = _col(h, "E item_name"), _col(h, "V item_description"), _col(h, "AI item_material")
+        for r in rows[1:]:
+            qsm[v(r, ci)] = {"desc": v(r, cd), "material": v(r, cm)}
+    # 옵션
+    opts = {}
+    rows = S("옵션")
+    if rows:
+        h = _hdr(rows[0]); c = {k: _col(h, k) for k in ["상품번호", "옵션명1", "값1", "옵션명2", "값2", "추가금"]}
+        for r in rows[1:]:
+            no = v(r, c["상품번호"])
+            if not v(r, c["값1"]):
+                continue
+            o = opts.setdefault(no, {"name": v(r, c["옵션명1"]), "name2": v(r, c["옵션명2"]), "rows": []})
+            o["rows"].append({"value": v(r, c["값1"]), "value2": v(r, c["값2"]), "add": num(v(r, c["추가금"]) or 0)})
+    # 단품
+    rows = S("단품")
+    if rows:
+        h = _hdr(rows[0])
+        c = {k: _col(h, k) for k in ["상품번호", "한국어명", "큐텐 상품코드", "상태", "상품명(새)", "広告文", "検索ワード", "지금 판매가",
+                                     "원산국", "素材", "대표이미지", "추가이미지", "상세 HTML", "카테고리 코드", "브랜드 코드"]}
+        for r in rows[1:]:
+            no, title = v(r, c["상품번호"]), v(r, c["상품명(새)"])
+            if not no or not title:
+                continue
+            q = qsm.get(title, {})
+            items.append({"key": f"s{no}", "kind": "단품", "no": no, "kr_name": v(r, c["한국어명"]), "qoo_code": v(r, c["큐텐 상품코드"]),
+                          "status": v(r, c["상태"]), "title": title, "promo": v(r, c["広告文"]), "keywords": split(v(r, c["検索ワード"])),
+                          "price_now": num(v(r, c["지금 판매가"]) or 0), "origin": v(r, c["원산국"]), "material": v(r, c["素材"]) or q.get("material", ""),
+                          "main": v(r, c["대표이미지"]), "gallery": split(v(r, c["추가이미지"])), "desc": q.get("desc", ""),
+                          "desc_path": v(r, c["상세 HTML"]).replace("전달 폴더", "").strip(), "category": v(r, c["카테고리 코드"]),
+                          "brand": v(r, c["브랜드 코드"]), "opt": opts.get(no), "mode": "new"})
+    # 모음전
+    lines = {}
+    rows = S("모음전")
+    if rows:
+        h = _hdr(rows[0]); c = {k: _col(h, k) for k in ["모음전", "글자", "상품번호", "옵션명", "선택지 문구", "추가금"]}
+        for r in rows[1:]:
+            nm = v(r, c["모음전"])
+            if nm and v(r, c["선택지 문구"]):
+                lines.setdefault(nm, {"name": v(r, c["옵션명"]) or "デザイン", "rows": []})["rows"].append(
+                    {"value": v(r, c["선택지 문구"]), "letter": v(r, c["글자"]), "no": v(r, c["상품번호"])})
+    rows = S("모음전_리스팅")
+    if rows:
+        h = _hdr(rows[0])
+        c = {k: _col(h, k) for k in ["모음전", "큐텐 상품코드", "할 일", "상품명(새)", "広告文", "検索ワード", "대표이미지", "추가이미지", "상세 HTML", "원산국"]}
+        base = next((i for i in items if i["category"]), {})
+        for r in rows[1:]:
+            nm = v(r, c["모음전"])
+            if not nm:
+                continue
+            code = v(r, c["큐텐 상품코드"])
+            items.append({"key": f"c{len(items)}", "kind": "모음전", "no": "", "kr_name": nm, "qoo_code": code if code.isdigit() else "",
+                          "status": v(r, c["할 일"]), "title": v(r, c["상품명(새)"]), "promo": v(r, c["広告文"]),
+                          "keywords": split(v(r, c["検索ワード"])), "price_now": 0, "origin": v(r, c["원산국"]),
+                          "material": base.get("material", ""), "main": v(r, c["대표이미지"]), "gallery": split(v(r, c["추가이미지"])),
+                          "desc": "", "desc_path": v(r, c["상세 HTML"]).replace("전달 폴더", "").strip(),
+                          "category": base.get("category", ""), "brand": base.get("brand", ""), "coll": lines.get(nm),
+                          "mode": "update" if code.isdigit() else "new"})
+    dc = next((i["category"] for i in items if i["category"]), "")
+    db_ = next((i["brand"] for i in items if i["brand"]), "")
+    for i in items:
+        i["category"] = i["category"] or dc
+        i["brand"] = i["brand"] or db_
+    return {"items": items, "sheets": wb.sheetnames}
+
+
 class RegisterIn(BaseModel):
     params: dict
     confirm: bool = False
@@ -605,18 +832,24 @@ def apply_gallery(item_code, seller_code, urls):
 
 
 def apply_options(item_code, seller_code, opt):
+    """rows: [{value, price, qty, code}] (1단) 또는 [{value, value2, ...}] + opt.name2 (2단)"""
     rows = [r for r in (opt or {}).get("rows", []) if str(r.get("value", "")).strip()]
     name = str((opt or {}).get("name") or "オプション").strip()
+    name2 = str((opt or {}).get("name2") or "").strip()
     if not rows:
         return None
+    two = bool(name2) and any(str(r.get("value2", "")).strip() for r in rows)
     def fmt(r, style):
         v, pr, q, cd = r["value"], str(r.get("price") or 0), str(r.get("qty") or 0), r.get("code") or ""
+        if two:
+            v2 = r.get("value2", "")
+            return f"{name}||*{v}||*{name2}||*{v2}||*{pr}||*{q}||*{cd}"
         return (f"{name}||*{v}||*{pr}||*{q}||*{cd}" if style == 1
                 else f"{name}||*{v}||*||*||*{pr}||*{q}||*{cd}")
     if DEMO:
-        return {"ResultCode": 0, "ResultMsg": "DEMO", "format": 1, "InventoryInfo": "$$".join(fmt(r, 1) for r in rows)}
+        return {"ResultCode": 0, "ResultMsg": "DEMO", "format": 1, "InventoryInfo": "$$".join(fmt(r, 1) for r in rows)[:300]}
     tried = []
-    for style in (1, 2):  # 큐텐 문서의 두 가지 표기(1단/2단 옵션)를 순서대로 시도
+    for style in ((1,) if two else (1, 2)):  # 큐텐 문서의 표기를 순서대로 시도
         info = "$$".join(fmt(r, style) for r in rows)
         res = client().write("ItemsOptions.EditGoodsInventory",
                              {"ItemCode": str(item_code), "SellerCode": seller_code or "", "InventoryInfo": info})
@@ -624,7 +857,7 @@ def apply_options(item_code, seller_code, opt):
         tried.append(res)
         if str(res.get("ResultCode")) == "0":
             return res
-    return {"ResultCode": -1, "ResultMsg": "옵션 등록 실패 (두 형식 모두 거절)", "tried": tried}
+    return {"ResultCode": -1, "ResultMsg": "옵션 등록 실패 (형식 거절)", "tried": tried}
 
 
 def _ok(res):

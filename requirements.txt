@@ -3,3 +3,4 @@ uvicorn[standard]>=0.29
 requests>=2.31
 python-multipart>=0.0.9
 Pillow>=10.0
+openpyxl>=3.1
