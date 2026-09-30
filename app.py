@@ -114,6 +114,15 @@ def sync():
             q = Qoo10(KEY)
             now = datetime.now().isoformat(timespec="seconds")
             prods = q.products()
+            for p in prods:  # 목록 API에 상품명·가격이 없으면 상세 조회로 보충
+                if not pick(p, "ItemTitle", "ItemName"):
+                    try:
+                        obj = q.detail(pick(p, "ItemCode", "GdNo", "ItemNo")).get("ResultObject")
+                        obj = obj[0] if isinstance(obj, list) and obj else obj
+                        if isinstance(obj, dict):
+                            p.update({k: v for k, v in obj.items() if v not in (None, "") and not p.get(k)})
+                    except Exception:
+                        pass
             with db() as c:
                 for p in prods:
                     c.execute("REPLACE INTO products VALUES(?,?,?,?,?,?,?,?,?)", (
