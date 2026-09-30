@@ -276,6 +276,13 @@ function optionBlock(){return `<div class="f wide" style="margin-top:12px"><labe
   <div style="display:grid;grid-template-columns:1fr 110px 90px 140px 32px;gap:6px;font-size:11px;color:var(--sub);margin:10px 0 4px"><span>옵션 값</span><span>추가금액(엔)</span><span>재고</span><span>옵션 코드(선택)</span><span></span></div>
   <div id="opts"></div><button class="chip" onclick="addOpt()">+ 한 줄 추가</button>
   <button class="chip" style="border-color:var(--blue);color:var(--blue)" id="aiOptBtn" onclick="aiOptions()">✦ 상세페이지에서 옵션 가져오기</button> <span class="desc" id="aiOptMsg"></span>
+  <div class="form" style="grid-template-columns:1fr 130px 130px auto;align-items:end;margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
+   <div class="f"><label>자사몰 가격 연동 · 카테고리 주소</label><input id="pm_url" value="${esc(R.pm?.url||'https://wblbeauty.com/product/list.html?cate_no=1105')}"></div>
+   <div class="f"><label>기준 한국가 (원)</label><input id="pm_krw" type="number" value="${esc(R.pm?.krw||17900)}"></div>
+   <div class="f"><label>기준 큐텐가 (엔)</label><input id="pm_jpy" type="number" value="${esc(R.pm?.jpy||2400)}"></div>
+   <div class="f"><label>&nbsp;</label><button class="chip" style="border-color:var(--blue);color:var(--blue)" id="pmBtn" onclick="priceMap()">✦ 자사몰 가격으로 추가금 채우기</button></div></div>
+  <div class="hint">옵션마다 자사몰 상품을 찾아 <b>판매가 × (기준 큐텐가 ÷ 기준 한국가) − 기준 큐텐가</b>로 추가금을 계산해요. 결과 표에서 매칭이 맞는지 꼭 확인하세요.</div>
+  <div id="pmResult"></div>
   <div class="hint" id="optSum"></div></div>`}
 function fullDesc(){return (R.v.ItemDescription||'')+(R.toDesc?R.gallery.map(u=>`<p><img src="${u}" style="max-width:100%"></p>`).join(''):'')}
 function buildParams(){readR();const v=R.v,p={SecondSubCat:v.SecondSubCat,ItemTitle:v.ItemTitle,PromotionName:v.PromotionName,SellerCode:v.SellerCode,
@@ -312,6 +319,16 @@ window.aiOptions=async(auto)=>{readR();const isEdit=st.page==='patch';if(isEdit)
     R.inv.rows=j.values.map(v=>({value:v,price:0,qty:q,code:''}));renderOpts();refreshAll();
     m.innerHTML=`<b class="green">${j.values.length}개 옵션을 채웠어요</b> (${j.found_in==='image'?'이미지에서':'글자에서'} 찾음) · 표기가 맞는지 꼭 확인해 주세요${j.note?' · '+esc(j.note):''}`}}
   catch(e){m.textContent='실패: '+e.message}b.disabled=false};
+window.priceMap=async()=>{readR();const vals=R.inv.rows.filter(r=>r&&r.value).map(r=>r.value);if(!vals.length){alert('먼저 옵션 목록을 만들어 주세요');return}
+  R.pm={url:$('#pm_url').value,krw:$('#pm_krw').value,jpy:$('#pm_jpy').value};
+  const b=$('#pmBtn'),box=$('#pmResult');b.disabled=true;box.innerHTML='<div class="desc" style="margin-top:8px">자사몰 가격을 읽고 옵션과 맞춰 보는 중이에요… (20~40초)</div>';
+  try{const r=await fetch('/api/ai/price-map',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:vals,url:R.pm.url,base_krw:+R.pm.krw,base_jpy:+R.pm.jpy})});const j=await r.json();
+   if(!r.ok)throw new Error(j.detail);
+   j.rows.forEach(m=>{const row=R.inv.rows.find(x=>x.value===m.value);if(row&&m.add!=null){row.price=m.over_cap?Math.sign(m.add)*Math.floor(+R.pm.jpy*0.5/10)*10:m.add;row.kr=m.kr_name}});
+   renderOpts();refreshAll();
+   box.innerHTML=`<table class="sumtbl" style="min-width:0;margin-top:10px"><tr><td>옵션</td><td>자사몰 상품 · 판매가 → 추가금</td></tr>${j.rows.map(m=>`<tr><td>${esc(m.value)}</td><td>${m.kr_name?`${esc(m.kr_name)} · ${Math.round(m.kr_price).toLocaleString()}원 → <b>${m.add>=0?'+':''}${m.add}엔</b>`:'<span class="red">못 찾음 (직접 입력)</span>'}
+    ${m.confidence==='low'?' <span class="tag orange">확인 필요</span>':''}${m.over_cap?` <span class="tag red">상한(±50%) 초과 → ${Math.floor(+R.pm.jpy*0.5/10)*10}엔으로 맞춤</span>`:''}</td></tr>`).join('')}</table>`}
+  catch(e){box.innerHTML=`<div class="result ng">${esc(e.message)}</div>`}b.disabled=false};
 window.bulkOpt=()=>{readR();const q=$('#o_qty').value||10;$('#o_bulk').value.split('\n').map(x=>x.trim()).filter(Boolean).forEach(v=>R.inv.rows.push({value:v,price:0,qty:q,code:''}));$('#o_bulk').value='';renderOpts();refreshAll()};
 const E={code:'',sc:'',orig:{},v:{},loaded:false};
 const EBASIC=['ItemTitle','PromotionName','Keyword','SecondSubCat','ShippingNo','ContactInfo','AvailableDateValue','RetailPrice'];
