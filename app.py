@@ -50,6 +50,7 @@ with db() as c:
     CREATE TABLE IF NOT EXISTS orders(order_no TEXT PRIMARY KEY, pack_no TEXT, item_code TEXT, seller_code TEXT,
         title TEXT, option TEXT, qty INTEGER, amount REAL, order_date TEXT, pay_date TEXT, ship_date TEXT,
         status TEXT, carrier TEXT, tracking TEXT, buyer TEXT, raw TEXT, updated TEXT);
+    CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
     CREATE TABLE IF NOT EXISTS registrations(id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, seller_code TEXT,
         title TEXT, price REAL, ok INTEGER, gd_no TEXT, message TEXT, params TEXT);
     CREATE TABLE IF NOT EXISTS sync_log(id INTEGER PRIMARY KEY AUTOINCREMENT, started TEXT, finished TEXT,
@@ -810,6 +811,137 @@ async def sheet_parse(file: UploadFile = File(...)):
         i["category"] = i["category"] or dc
         i["brand"] = i["brand"] or db_
     return {"items": items, "sheets": wb.sheetnames}
+
+
+# ── 간편 신규 등록 (자사몰 상품번호 + 폴더) ────────────────────
+RULES_DEFAULT = {
+    "title_template": "【公式】耳つぼジュエリー {line} 1箱20粒（1シート） {variant} 耳ツボ 耳つぼシール 貼るピアス 穴あけ不要 ギフト",
+    "base_keywords": "耳ツボジュエリー, 耳ツボシール, 耳つぼピアス, ジュエリーシール, 耳つぼシート, イヤージュエリー, 耳ツボピアス, シールピアス, プレゼント",
+    "banned_words": "小顔, 痩せる, ダイエット効果, 治る, 効く, 効果, No.1, 最安, 医療",
+    "category": "320001861", "brand": "139162", "shipping": "813346", "contact": "cx@wisland.co.kr",
+    "base_krw": 17900, "base_jpy": 2400, "fx": 9.3, "opt_qty": 10, "single_qty": 30, "prefix": "WBL-",
+    "mall_detail_url": "https://wblbeauty.com/product/detail.html?product_no={no}",
+    "max_title": 100, "detail_mb_warn": 40,
+}
+
+
+def rules():
+    with db() as c:
+        row = c.execute("SELECT v FROM settings WHERE k='rules'").fetchone()
+    r = dict(RULES_DEFAULT)
+    if row:
+        try:
+            r.update(json.loads(row["v"]))
+        except ValueError:
+            pass
+    return r
+
+
+@app.get("/api/settings", dependencies=[Depends(auth)])
+def get_settings():
+    return rules()
+
+
+@app.post("/api/settings", dependencies=[Depends(auth)])
+def save_settings(body: dict):
+    r = {k: body[k] for k in RULES_DEFAULT if k in body}
+    cur = rules(); cur.update(r)
+    with db() as c:
+        c.execute("REPLACE INTO settings VALUES('rules',?)", (json.dumps(cur, ensure_ascii=False),))
+    return cur
+
+
+def _mall_detail(no, url_tpl):
+    """자사몰 상세 페이지 → (텍스트, 옵션 select 요약, 메타 가격)"""
+    import re, requests as rq
+    page = rq.get(url_tpl.format(no=no), timeout=30, headers={"User-Agent": "Mozilla/5.0"}).text
+    metas = dict(re.findall(r'<meta[^>]+property="(product:[^"]+|og:title)"[^>]+content="([^"]*)"', page))
+    selects = []
+    for attrs, body in re.findall(r"<select([^>]*)>(.*?)</select>", page, flags=re.S | re.I):
+        t = re.search(r'option_title="([^"]+)"', attrs)
+        opts = [_strip_html(x) for x in re.findall(r"<option[^>]*>(.*?)</option>", body, flags=re.S)]
+        opts = [o for o in opts if o and not re.search(r"선택|-{3,}|필수", o)]
+        if t and opts:
+            selects.append({"title": t.group(1), "values": opts})
+    return _strip_html(page)[:6000], selects, metas
+
+
+DRAFT_NEW_SYSTEM = """あなたはQoo10 Japan「wbL公式」の出品担当です。韓国自社モールの商品情報と、日本語の詳細ページテキストから出品データを作ります。
+- line: 日本語のライン名(カタカナ)。詳細ページに表記があればそれを最優先で同じ表記に。例: セリン パール クローバー
+- options: 韓国モールの選択肢を日本語に。オプション名は カラー/サイズ/タイプ のいずれか。値は詳細ページの表記を優先(例: シャーベットホワイト, S_3mm)。
+  色+サイズのように2段なら2つ。選択肢がなければ空配列。「1箱20粒」等の数量は選択肢ではない。
+- promo: 広告文、全角20文字以内、効能表現なし(例: パールとクリスタル 穴あけ不要)
+- motif: 検索用のモチーフ語0〜2個(例: 花, 蝶, 星, 月, バラ, キラキラ, パール)
+- kr_name, price(판매가), consumer(소비자가) を韓国モールから。
+必ずJSONのみ: {"kr_name":"","price":0,"consumer":0,"line":"","options":[{"name":"カラー","values":[""]}],"promo":"","motif":[]}"""
+
+
+class NewDraftIn(BaseModel):
+    no: str
+    html: str = ""
+
+
+@app.post("/api/new/draft", dependencies=[Depends(auth)])
+def new_draft(d: NewDraftIn):
+    import re
+    R = rules()
+    no = re.sub(r"\D", "", d.no)
+    if not no:
+        raise HTTPException(400, "자사몰 상품번호가 필요해요")
+    warn = []
+    try:
+        text, selects, metas = _mall_detail(no, R["mall_detail_url"])
+    except Exception as e:
+        text, selects, metas = "", [], {}
+        warn.append(f"자사몰 페이지를 못 읽었어요({e.__class__.__name__}) — 저장된 가격표로 대신해요")
+    jp_text = _strip_html(d.html)[:4000] if d.html else ""
+    user = (f"商品番号: {no}\n韓国モールのメタ: {json.dumps(metas, ensure_ascii=False)}\n韓国モールの選択肢: {json.dumps(selects, ensure_ascii=False)}\n"
+            f"韓国モール本文: {text[:4000]}\n\n日本語の詳細ページ本文: {jp_text or '(なし)'}")
+    j = _ai(DRAFT_NEW_SYSTEM, user, 2000)
+    price_kr, cons_kr = num(j.get("price") or 0), num(j.get("consumer") or 0)
+    if not price_kr and no in MALL_DEFAULT:
+        price_kr, cons_kr = MALL_DEFAULT[no]
+    if not price_kr:
+        warn.append("자사몰 판매가를 찾지 못했어요 — 판매가를 직접 입력해 주세요")
+    ratio = float(R["base_jpy"]) / float(R["base_krw"])
+    price = int(round(price_kr * ratio / 10) * 10) if price_kr else 0
+    retail = int(cons_kr / float(R["fx"]) // 100 * 100) if cons_kr else 0
+    if retail and retail <= price:
+        retail = 0
+    opts = [o for o in (j.get("options") or []) if o.get("values")][:2]
+    # 상품명 규칙
+    def variant():
+        parts = []
+        for o in opts:
+            n, vs = o.get("name", ""), o["values"]
+            if "カラー" in n:
+                parts.append(" ".join(vs) if len(vs) <= 2 and all(len(x) <= 5 for x in vs) else f"全{len(vs)}色")
+            elif "サイズ" in n:
+                parts.append(f"{len(vs)}サイズ")
+            elif len(vs) > 1:
+                parts.append(f"{len(vs)}タイプ")
+        return " ".join(parts)
+    line = (j.get("line") or "").strip()
+    title = re.sub(r"\s+", " ", R["title_template"].format(line=line, variant=variant())).strip()
+    if len(title) > int(R["max_title"]):
+        warn.append(f"상품명이 {len(title)}자로 길어요 (최대 {R['max_title']})")
+    keywords = [k.strip() for k in (j.get("motif") or []) + R["base_keywords"].split(",") if k.strip()]
+    promo = (j.get("promo") or "").strip()
+    banned = [w.strip() for w in R["banned_words"].split(",") if w.strip()]
+    hit = [w for w in banned if w in title + promo]
+    if hit:
+        warn.append("금지어 포함: " + ", ".join(hit))
+    rows = []
+    if len(opts) == 2:
+        for v1 in opts[0]["values"]:
+            for v2 in opts[1]["values"]:
+                rows.append({"value": v1, "value2": v2, "price": 0})
+    elif opts:
+        rows = [{"value": v, "price": 0} for v in opts[0]["values"]]
+    return {"no": no, "kr_name": j.get("kr_name", ""), "line": line, "title": title, "promo": promo, "keywords": keywords,
+            "price": price, "retail": retail, "kr_price": price_kr, "kr_consumer": cons_kr,
+            "opt": {"name": opts[0]["name"] if opts else "", "name2": opts[1]["name"] if len(opts) > 1 else "", "rows": rows},
+            "warn": warn, "rules": {k: R[k] for k in ("category", "brand", "shipping", "contact", "opt_qty", "single_qty", "prefix", "detail_mb_warn")}}
 
 
 class RegisterIn(BaseModel):
