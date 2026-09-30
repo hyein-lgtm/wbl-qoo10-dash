@@ -299,6 +299,7 @@ def sync_log():
 IMG_DIR = Path(DB).parent / "images"
 IMG_DIR.mkdir(exist_ok=True)
 AI_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+CONTACT = os.getenv("CONTACT_INFO", "cx@wisland.co.kr").strip()  # A/S 연락처 통일값
 AI_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 REQUIRED = ["SecondSubCat", "ItemTitle", "SellerCode", "ContactInfo", "StandardImage",
             "ItemDescription", "ItemPrice", "ItemQty", "ShippingNo"]
@@ -652,6 +653,7 @@ def patch_item(code: str, body: PatchIn):
 @app.post("/api/items/register", dependencies=[Depends(auth)])
 def register_item(body: RegisterIn):
     p = {k: str(v).strip() for k, v in body.params.items() if str(v).strip() != ""}
+    p.setdefault("ContactInfo", CONTACT)
     missing = [k for k in REQUIRED if k not in p]
     if missing:
         raise HTTPException(400, "필수 항목이 비어 있어요: " + ", ".join(missing))
@@ -720,7 +722,7 @@ BASIC_MAP = {  # UpdateGoods 파라미터: 상세 조회 응답에서 찾을 키
     "ManufactureDate": ["ManufactureDate"], "RetailPrice": ["RetailPrice"], "ExpireDate": ["ExpireDate"],
 }
 BASIC_DEFAULT = {"ProductionPlaceType": "2", "ProductionPlace": "KR", "AdultYN": "N", "AvailableDateType": "0",
-                 "AvailableDateValue": "3", "ContactInfo": os.getenv("CONTACT_INFO", "")}
+                 "AvailableDateValue": "3", "ContactInfo": CONTACT}
 
 
 def _clean(v):
@@ -790,6 +792,22 @@ def update_item(code: str, body: UpdateIn):
     return {"ok": all(str(v.get("ResultCode")) == "0" for v in out.values()), "steps": out}
 
 
+@app.post("/api/bulk/contact", dependencies=[Depends(auth)])
+def bulk_contact():
+    """판매중 전체 상품의 A/S 연락처를 CONTACT 값으로 통일"""
+    with db() as c:
+        codes = [r["item_code"] for r in c.execute("SELECT item_code FROM products")]
+    if not codes:
+        raise HTTPException(400, "상품 목록이 비어 있어요. 먼저 동기화해 주세요")
+    results = []
+    for code in codes:
+        res = update_basic(code, {"ItemCode": code, "SellerCode": ""}, {"ContactInfo": CONTACT})
+        results.append({"item_code": code, "ok": str(res.get("ResultCode")) == "0",
+                        "message": res.get("ResultMsg") or res.get("ErrorMsg") or ""})
+        time.sleep(0.3)
+    return {"contact": CONTACT, "total": len(results), "ok": sum(r["ok"] for r in results), "results": results}
+
+
 @app.get("/api/registrations", dependencies=[Depends(auth)])
 def registrations():
     with db() as c:
@@ -811,7 +829,7 @@ def ai_test():
 
 @app.get("/api/config", dependencies=[Depends(auth)])
 def config():
-    return {"demo": DEMO, "ai": bool(AI_KEY), "ai_model": AI_MODEL}
+    return {"demo": DEMO, "ai": bool(AI_KEY), "ai_model": AI_MODEL, "contact": CONTACT}
 
 
 @app.get("/", dependencies=[Depends(auth)])
