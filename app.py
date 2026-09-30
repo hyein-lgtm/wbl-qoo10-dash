@@ -592,14 +592,66 @@ def _w(method, params):
         return {"ResultCode": -1, "ResultMsg": str(e)}
 
 
+# UpdateGoods는 바꾸지 않는 필수 항목까지 전부 보내야 해서, 현재 상품 정보를 읽어 채운다
+BASIC_MAP = {  # UpdateGoods 파라미터: 상세 조회 응답에서 찾을 키 후보
+    "SecondSubCat": ["SecondSubCatCd", "SecondSubCat"], "ItemTitle": ["ItemTitle"], "PromotionName": ["PromotionName"],
+    "ProductionPlaceType": ["ProductionPlaceType"], "ProductionPlace": ["ProductionPlace", "ProductionPlaceCd"],
+    "AdultYN": ["AdultYN"], "ContactInfo": ["ContactInfo"], "ShippingNo": ["ShippingNo", "DeliveryGroupNo"],
+    "Weight": ["Weight"], "AvailableDateType": ["AvailableDateType"], "AvailableDateValue": ["AvailableDateValue"],
+    "Keyword": ["Keyword", "SearchKeyword"], "BrandNo": ["BrandNo"], "ModelNM": ["ModelNM", "ModelName"],
+    "Material": ["Material"], "IndustrialCodeType": ["IndustrialCodeType"], "IndustrialCode": ["IndustrialCode"],
+    "ManufactureDate": ["ManufactureDate"], "RetailPrice": ["RetailPrice"], "ExpireDate": ["ExpireDate"],
+}
+BASIC_DEFAULT = {"ProductionPlaceType": "2", "ProductionPlace": "KR", "AdultYN": "N", "AvailableDateType": "0",
+                 "AvailableDateValue": "3", "ContactInfo": os.getenv("CONTACT_INFO", "")}
+
+
+def _clean(v):
+    s = str(v).strip()
+    if s.replace(".", "", 1).isdigit() and s.endswith(".0000"):
+        s = s[:-5]
+    return s
+
+
+def update_basic(code, base, edits):
+    import re
+    cur = {}
+    if not DEMO:
+        try:
+            obj = client().detail(code).get("ResultObject")
+            obj = obj[0] if isinstance(obj, list) and obj else (obj or {})
+            for k, cands in BASIC_MAP.items():
+                for c in cands:
+                    if obj.get(c) not in (None, ""):
+                        cur[k] = _clean(obj[c]); break
+        except Exception:
+            pass
+    if cur.get("RetailPrice") in ("0", "0.0"):
+        cur.pop("RetailPrice")
+    p = {**base, **{k: v for k, v in BASIC_DEFAULT.items() if v}, **cur,
+         **{k: str(v).strip() for k, v in edits.items() if str(v).strip() != ""}}
+    res = _w("ItemsBasic.UpdateGoods", p)
+    for _ in range(4):  # 'XXXは必須です' 이면 기본값을 채워 재시도
+        m = re.search(r"([A-Za-z]+)は必須", str(res.get("ResultMsg") or res.get("ErrorMsg") or ""))
+        if not m or str(res.get("ResultCode")) == "0":
+            break
+        k = m.group(1)
+        if k in p or k not in BASIC_DEFAULT or not BASIC_DEFAULT[k]:
+            res["ResultMsg"] = f"{res.get('ResultMsg')} (필수 항목 {k} 값이 필요해요)"
+            break
+        p[k] = BASIC_DEFAULT[k]
+        res = _w("ItemsBasic.UpdateGoods", p)
+    res["sent"] = {k: (v if len(str(v)) < 80 else str(v)[:80] + "…") for k, v in p.items()}
+    return res
+
+
 @app.post("/api/items/{code}/update", dependencies=[Depends(auth)])
 def update_item(code: str, body: UpdateIn):
     """등록된 상품 수정: 바뀐 부분만 해당 API로 보낸다."""
     base = {"ItemCode": str(code), "SellerCode": body.seller_code or ""}
     out = {}
     if body.basic:
-        p = {**base, **{k: str(v).strip() for k, v in body.basic.items() if str(v).strip() != ""}}
-        out["basic"] = _w("ItemsBasic.UpdateGoods", p)
+        out["basic"] = update_basic(code, base, body.basic)
     if body.price_qty:
         out["price_qty"] = _w("ItemsOrder.SetGoodsPriceQty", {**base, "Price": str(body.price_qty.get("price", "")),
                                                                "Qty": str(body.price_qty.get("qty", ""))})
@@ -628,9 +680,21 @@ def registrations():
     return rows
 
 
+@app.get("/api/ai/test", dependencies=[Depends(auth)])
+def ai_test():
+    """AI 키·모델이 실제로 동작하는지 확인"""
+    import requests as rq
+    if not AI_KEY:
+        return {"ok": False, "message": "ANTHROPIC_API_KEY가 서버에 없어요 (변수 이름 확인 후 재배포)"}
+    r = rq.post("https://api.anthropic.com/v1/messages", timeout=30,
+                headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": AI_MODEL, "max_tokens": 10, "messages": [{"role": "user", "content": "ping"}]})
+    return {"ok": r.status_code == 200, "status": r.status_code, "model": AI_MODEL, "message": r.text[:300]}
+
+
 @app.get("/api/config", dependencies=[Depends(auth)])
 def config():
-    return {"demo": DEMO, "ai": bool(AI_KEY)}
+    return {"demo": DEMO, "ai": bool(AI_KEY), "ai_model": AI_MODEL}
 
 
 @app.get("/", dependencies=[Depends(auth)])
