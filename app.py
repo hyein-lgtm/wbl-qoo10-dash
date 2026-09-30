@@ -313,7 +313,8 @@ def client():
 @app.get("/api/items/{code}/detail", dependencies=[Depends(auth)])
 def item_detail(code: str):
     if DEMO:
-        return {"demo": True, "ResultObject": {"ItemCode": code, "SecondSubCat": "320001234", "ContactInfo": "info@wisland.co.kr",
+        return {"demo": True, "ResultObject": {"ItemCode": code, "ItemTitle": "주얼패치 베스트", "SellPrice": "6999.0000", "RetailPrice": "0.0000",
+                "ItemQty": "100", "ImageUrl": "https://picsum.photos/400", "SecondSubCatCd": "320001861", "ContactInfo": "info@wisland.co.kr",
                 "ShippingNo": "813346", "ProductionPlaceType": "2", "ProductionPlace": "KR", "AvailableDateType": "0", "AvailableDateValue": "3"}}
     try:
         return client().detail(code)
@@ -498,6 +499,56 @@ def register_item(body: RegisterIn):
     if ok and not DEMO:
         threading.Thread(target=sync, daemon=True).start()
     return {"ok": ok, "gd_no": gd, "message": msg, "raw": res, "gallery": g, "options": o}
+
+
+class UpdateIn(BaseModel):
+    seller_code: str = ""
+    basic: dict | None = None        # 상품명·카테고리 등 기본정보 (전체 세트)
+    price_qty: dict | None = None    # {"price","qty"}
+    image: str | None = None         # 대표 이미지 URL
+    description: str | None = None   # 상세 HTML
+    gallery: list = []
+    options: dict = {}
+
+
+def _w(method, params):
+    if DEMO:
+        return {"ResultCode": 0, "ResultMsg": "DEMO", "method": method}
+    try:
+        return client().write(method, params)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"ResultCode": -1, "ResultMsg": str(e)}
+
+
+@app.post("/api/items/{code}/update", dependencies=[Depends(auth)])
+def update_item(code: str, body: UpdateIn):
+    """등록된 상품 수정: 바뀐 부분만 해당 API로 보낸다."""
+    base = {"ItemCode": str(code), "SellerCode": body.seller_code or ""}
+    out = {}
+    if body.basic:
+        p = {**base, **{k: str(v).strip() for k, v in body.basic.items() if str(v).strip() != ""}}
+        out["basic"] = _w("ItemsBasic.UpdateGoods", p)
+    if body.price_qty:
+        out["price_qty"] = _w("ItemsOrder.SetGoodsPriceQty", {**base, "Price": str(body.price_qty.get("price", "")),
+                                                               "Qty": str(body.price_qty.get("qty", ""))})
+    if body.image:
+        out["image"] = _w("ItemsContents.EditGoodsImage", {**base, "StandardImage": body.image})
+    if body.description is not None:
+        out["description"] = _w("ItemsContents.EditGoodsContents", {**base, "Contents": body.description})
+    try:
+        g = apply_gallery(code, body.seller_code, body.gallery)
+        if g: out["gallery"] = g
+        o = apply_options(code, body.seller_code, body.options)
+        if o: out["options"] = o
+    except Exception as e:
+        out["gallery_options"] = {"ResultCode": -1, "ResultMsg": str(e)}
+    if not out:
+        raise HTTPException(400, "바뀐 내용이 없어요")
+    if not DEMO:
+        threading.Thread(target=sync, daemon=True).start()
+    return {"ok": all(str(v.get("ResultCode")) == "0" for v in out.values()), "steps": out}
 
 
 @app.get("/api/registrations", dependencies=[Depends(auth)])
