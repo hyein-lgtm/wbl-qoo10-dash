@@ -399,6 +399,66 @@ def ai_draft(d: DraftIn):
 class RegisterIn(BaseModel):
     params: dict
     confirm: bool = False
+    gallery: list = []   # 추가이미지(갤러리) URL, 최대 50
+    options: dict = {}   # {"name": "デザイン", "rows": [{"value","price","qty","code"}]}
+
+
+def apply_gallery(item_code, seller_code, urls):
+    urls = [u for u in urls if u][:50]
+    if not urls:
+        return None
+    p = {"ItemCode": str(item_code), "SellerCode": seller_code or ""}
+    for i, u in enumerate(urls, 1):
+        p[f"EnlargedImage{i}"] = u
+    if DEMO:
+        return {"ResultCode": 0, "ResultMsg": "DEMO", "count": len(urls)}
+    return client().write("ItemsContents.EditGoodsMultiImage", p)
+
+
+def apply_options(item_code, seller_code, opt):
+    rows = [r for r in (opt or {}).get("rows", []) if str(r.get("value", "")).strip()]
+    name = str((opt or {}).get("name") or "オプション").strip()
+    if not rows:
+        return None
+    def fmt(r, style):
+        v, pr, q, cd = r["value"], str(r.get("price") or 0), str(r.get("qty") or 0), r.get("code") or ""
+        return (f"{name}||*{v}||*{pr}||*{q}||*{cd}" if style == 1
+                else f"{name}||*{v}||*||*||*{pr}||*{q}||*{cd}")
+    if DEMO:
+        return {"ResultCode": 0, "ResultMsg": "DEMO", "format": 1, "InventoryInfo": "$$".join(fmt(r, 1) for r in rows)}
+    tried = []
+    for style in (1, 2):  # 큐텐 문서의 두 가지 표기(1단/2단 옵션)를 순서대로 시도
+        info = "$$".join(fmt(r, style) for r in rows)
+        res = client().write("ItemsOptions.EditGoodsInventory",
+                             {"ItemCode": str(item_code), "SellerCode": seller_code or "", "InventoryInfo": info})
+        res["format"] = style
+        tried.append(res)
+        if str(res.get("ResultCode")) == "0":
+            return res
+    return {"ResultCode": -1, "ResultMsg": "옵션 등록 실패 (두 형식 모두 거절)", "tried": tried}
+
+
+def _ok(res):
+    return res is None or str(res.get("ResultCode")) == "0"
+
+
+class PatchIn(BaseModel):
+    seller_code: str = ""
+    gallery: list = []
+    options: dict = {}
+
+
+@app.post("/api/items/{code}/patch", dependencies=[Depends(auth)])
+def patch_item(code: str, body: PatchIn):
+    """이미 등록된 상품에 추가이미지·옵션을 넣는다."""
+    try:
+        g = apply_gallery(code, body.seller_code, body.gallery)
+        o = apply_options(code, body.seller_code, body.options)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, str(e))
+    return {"ok": _ok(g) and _ok(o), "gallery": g, "options": o}
 
 
 @app.post("/api/items/register", dependencies=[Depends(auth)])
@@ -425,9 +485,19 @@ def register_item(body: RegisterIn):
         c.execute("INSERT INTO registrations(created,seller_code,title,price,ok,gd_no,message,params) VALUES(?,?,?,?,?,?,?,?)",
                   (datetime.now().isoformat(timespec="seconds"), p["SellerCode"], p["ItemTitle"], num(p["ItemPrice"]),
                    int(ok), gd, json.dumps(res, ensure_ascii=False)[:1500], json.dumps(p, ensure_ascii=False)))
+    g = o = None
+    if ok and gd:
+        try:
+            g = apply_gallery(gd, p["SellerCode"], body.gallery)
+        except Exception as e:
+            g = {"ResultCode": -1, "ResultMsg": str(e)}
+        try:
+            o = apply_options(gd, p["SellerCode"], body.options)
+        except Exception as e:
+            o = {"ResultCode": -1, "ResultMsg": str(e)}
     if ok and not DEMO:
         threading.Thread(target=sync, daemon=True).start()
-    return {"ok": ok, "gd_no": gd, "message": msg, "raw": res}
+    return {"ok": ok, "gd_no": gd, "message": msg, "raw": res, "gallery": g, "options": o}
 
 
 @app.get("/api/registrations", dependencies=[Depends(auth)])
