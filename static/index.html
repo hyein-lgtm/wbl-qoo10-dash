@@ -184,12 +184,12 @@ const pages={
    ${F('ContactInfo','A/S 연락처',{req:1,ph:'이메일 또는 전화'})}
   </div><div id="cloneRaw" class="hint" style="margin-top:8px"></div></div>
 
-  <div class="panel"><div class="step"><i>2</i>한국어 정보 → 일본어 초안</div><div class="form">
+  <details class="panel" ${R.v.name_ko?'open':''}><summary class="step" style="cursor:pointer;margin:0"><i>2</i>한국어 정보 → 일본어 초안 <span class="desc" style="font-weight:400">(선택 · 상세 HTML이 이미 있으면 건너뛰세요)</span></summary><div class="form" style="margin-top:12px">
    ${F('name_ko','상품명 (한국어)',{ph:'예: 14K 오행 밸런스 도트 원터치 링 귀걸이'})}
    ${F('keywords','넣고 싶은 검색어',{ph:'耳つぼジュエリー, 14K 등'})}
    ${F('features','특징',{ta:1,wide:1,ph:'소재, 디자인 포인트, 차별점'})}
    ${F('spec','구성·사양',{ta:1,ph:'구성품, 사이즈, 소재'})}${F('usage','사용법',{ta:1,ph:'부착·착용 방법'})}
-  </div><div style="margin-top:12px;display:flex;gap:8px;align-items:center"><button class="btn pri" id="aiBtn" ${cfg.ai?'':'disabled'} onclick="aiDraft()">✦ AI 일본어 초안 만들기</button><span class="desc" id="aiMsg"></span></div></div>
+  </div><div style="margin-top:12px;display:flex;gap:8px;align-items:center"><button class="btn pri" id="aiBtn" ${cfg.ai?'':'disabled'} onclick="aiDraft()">✦ AI 일본어 초안 만들기</button><span class="desc" id="aiMsg"></span></div></details>
 
   <div class="panel"><div class="step"><i>3</i>큐텐 등록 정보 (일본어)</div><div class="form">
    ${F('ItemTitle','상품명 (일본어)',{req:1,wide:1,hint:'<span id="tlen"></span> 전각 50자 이내 권장'})}
