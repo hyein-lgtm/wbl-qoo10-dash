@@ -473,7 +473,7 @@ def ai_options(d: OptIn):
             imgs.append(u)
     text = _strip_html(html)[:6000]
     best, notes = None, []
-    fmt = os.getenv("OPTION_FORMAT", "{code}.{product} {color}")
+    fmt = os.getenv("OPTION_FORMAT", "{no}.{product} {code}({color})")
     tiles = _image_tiles(imgs[:80])  # 긴 상세 이미지를 잘라서 AI 크기 제한(2000px)을 피함
     if not tiles and not text:
         raise HTTPException(400, "읽을 수 있는 상세 이미지가 없어요")
@@ -518,12 +518,14 @@ def ai_options(d: OptIn):
         seen.add(key)
         prod = str(it.get("product") or "").replace(" ", "").replace("\u3000", "")
         color = str(it.get("color") or "").strip()
-        if code:
-            v = fmt.format(code=code, no=it.get("no", ""), product=prod, color=color).strip()
-        else:
-            v = f"{prod} {color}".strip()
-        v = v.replace(" ()", "").replace("  ", " ").rstrip(". ")
-        rows.append({"sort": (code == "", code, str(it.get("no", ""))), "value": v, **it})
+        no = str(it.get("no") or "").strip()
+        no_i = int("".join(ch for ch in no if ch.isdigit()) or 0) or 9999
+        no_s = f"{no_i:02d}" if no_i != 9999 else ""
+        v = fmt.format(code=code, no=no_s, product=prod, color=color)
+        v = v.replace("()", "").replace("  ", " ").strip(" .")
+        if not no_s:
+            v = v.lstrip(".").strip()
+        rows.append({"sort": (no_i, code or "~"), "value": v, **it})
     rows.sort(key=lambda x: x["sort"])
     return {"name": j.get("name") or "デザイン", "values": [x["value"] for x in rows],
             "items": [{k: v for k, v in x.items() if k != "sort"} for x in rows],
