@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>큐텐 운영 에이전트</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f5f7fb;--card:#fff;--line:#e6e9f0;--text:#1d2433;--sub:#6b7385;--blue:#2563eb;--blue-soft:#eef3ff;
+--red:#dc2626;--orange:#ea580c;--green:#16a34a;--r:12px}
+*{box-sizing:border-box}body{margin:0;font-family:'Noto Sans KR',system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+.app{display:flex;min-height:100vh}
+aside{width:230px;background:#fff;border-right:1px solid var(--line);flex-shrink:0;position:sticky;top:0;height:100vh;overflow:auto}
+.logo{display:flex;align-items:center;gap:10px;padding:22px 18px;font-weight:700;font-size:17px;border-bottom:1px solid var(--line)}
+.logo i{width:30px;height:30px;border-radius:8px;background:var(--blue);display:grid;place-items:center;color:#fff;font-style:normal;font-size:13px}
+.grp{font-size:11px;color:var(--sub);padding:18px 18px 6px}
+nav a{display:flex;align-items:center;gap:10px;margin:2px 10px;padding:9px 12px;border-radius:8px;color:var(--text);text-decoration:none;cursor:pointer}
+nav a:hover{background:#f3f5f9}nav a.on{background:var(--blue-soft);color:var(--blue);font-weight:500}
+nav a .ct{margin-left:auto;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px}
+main{flex:1;min-width:0;padding:26px 28px 60px}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+h1{font-size:21px;margin:0 0 4px}.desc{color:var(--sub);font-size:13px}
+.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;font:inherit}
+.btn.pri{background:var(--blue);color:#fff;border-color:var(--blue)}
+.banner{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:var(--r);padding:10px 14px;margin:16px 0 0;font-size:13px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-top:16px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.chip{border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 11px;cursor:pointer;font:inherit;font-size:13px}
+.chip.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.chip.pill{border-radius:20px}.chip.pill.on{background:var(--blue-soft);color:var(--blue);border-color:var(--blue)}
+.lbl{color:var(--sub);font-size:13px;margin-right:4px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:16px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.kpi .t{font-size:12px;color:var(--sub)}.kpi .v{font-size:22px;font-weight:700;margin:6px 0 2px}.kpi .s{font-size:11px;color:var(--sub)}
+.red{color:var(--red)}.orange{color:var(--orange)}.green{color:var(--green)}.blue{color:var(--blue)}
+.search{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:11px 14px;margin-top:16px}
+.search input{border:0;outline:0;font:inherit;flex:1;min-width:0}
+.tbl{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:var(--r);margin-top:12px}
+.tbl .meta{padding:12px 16px;color:var(--sub);font-size:12px;border-bottom:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;min-width:760px}
+th{background:#f8f9fc;font-weight:500;font-size:12px;color:var(--sub);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;cursor:pointer}
+td{padding:11px 12px;border-bottom:1px solid #f0f2f6;white-space:nowrap}
+td.r,th.r{text-align:right}td.t{max-width:320px;overflow:hidden;text-overflow:ellipsis}
+tr:hover td{background:#fafbfe}
+.tag{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;background:#f1f3f7}
+.tag.red{background:#fee2e2;color:var(--red)}.tag.orange{background:#ffedd5;color:var(--orange)}.tag.green{background:#dcfce7;color:var(--green)}.tag.blue{background:var(--blue-soft)}
+.grid2{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+.ptitle{font-weight:500;margin-bottom:10px;display:flex;justify-content:space-between}
+.ptitle a{font-size:12px;color:var(--blue);cursor:pointer;font-weight:400}
+.chart svg{width:100%;height:220px;display:block}
+.empty{padding:40px;text-align:center;color:var(--sub)}
+.menu-btn{display:none}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+@media(max-width:720px){aside{position:fixed;left:-240px;z-index:10;transition:.2s;box-shadow:0 0 30px #0002}aside.open{left:0}
+main{padding:18px 16px 60px}.menu-btn{display:inline-block}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside id="side">
+  <div class="logo"><i>Q</i>큐텐 운영 에이전트</div>
+  <div class="grp">메인</div>
+  <nav>
+    <a data-p="home">▦ 통합 대시보드</a>
+    <a data-p="products">▥ 상품별 분석</a>
+    <a data-p="delay">⏱ 배송지연 관리 <span class="ct" id="delayCt" hidden></span></a>
+    <a data-p="orders">☰ 주문 조회</a>
+  </nav>
+  <div class="grp">관리</div>
+  <nav><a data-p="sync">⟳ 동기화 히스토리</a></nav>
+</aside>
+<main id="main"></main>
+</div>
+<script>
+const $=s=>document.querySelector(s), won=n=>'¥'+Math.round(n||0).toLocaleString(), nf=n=>Math.round(n||0).toLocaleString();
+const st={page:location.hash.slice(1)||'home',days:30,q:'',flag:'',status:'',sort:null};
+const api=async p=>{const r=await fetch(p,{method:p.includes('sync')&&!p.includes('log')?'POST':'GET'});if(!r.ok)throw new Error(r.status);return r.json()};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const PERIODS=[[1,'오늘'],[7,'최근 7일'],[30,'최근 30일'],[90,'최근 3개월'],[0,'전체']];
+let SUM=null;
+
+document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{st.page=a.dataset.p;st.q='';st.flag='';st.status='';location.hash=st.page;$('#side').classList.remove('open');render()});
+
+function head(t,d){return `<div class="head"><div><button class="btn menu-btn" onclick="side.classList.toggle('open')">☰</button>
+<h1>${t}</h1><div class="desc">${d}</div></div><div class="chips"><span class="desc" id="lastSync"></span>
+<button class="btn" onclick="doSync(this)">⟳ 지금 동기화</button></div></div>
+${SUM?.demo?'<div class="banner">데모 데이터로 표시 중이에요. 서버에 QOO10_KEY를 설정하면 실제 큐텐 데이터로 바뀌어요.</div>':''}
+${SUM?.last_sync&&!SUM.last_sync.ok?`<div class="banner">최근 동기화 실패: ${esc(SUM.last_sync.message).slice(0,300)}</div>`:''}`}
+function periods(){return `<div class="panel chips"><span class="lbl">기간</span>${PERIODS.map(([d,l])=>`<button class="chip ${st.days===d?'on':''}" onclick="st.days=${d};render()">${l}</button>`).join('')}</div>`}
+function kpi(t,v,s,c=''){return `<div class="kpi"><div class="t">${t}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`}
+function search(ph){return `<div class="search">⌕<input id="q" placeholder="${ph}" value="${esc(st.q)}"></div>`}
+function bindSearch(){const i=$('#q');if(!i)return;i.oninput=()=>{clearTimeout(i._t);i._t=setTimeout(()=>{st.q=i.value;render(true)},250)}}
+function pills(list,key){return `<div class="chips" style="margin-top:12px"><span class="lbl">빠른 필터</span>${list.map(([v,l])=>`<button class="chip pill ${st[key]===v?'on':''}" onclick="st.${key}=st.${key}==='${v}'?'':'${v}';render(true)">${l}</button>`).join('')}</div>`}
+function stTag(s){const c={배송요청:'orange',배송준비:'orange',배송중:'blue',배송완료:'green',구매확정:'green'}[s]||'';return `<span class="tag ${c}">${esc(s)}</span>`}
+
+function table(rows,cols,meta){
+  if(st.sort){const [k,dir]=st.sort;rows=[...rows].sort((a,b)=>((a[k]??-1e18)>(b[k]??-1e18)?1:-1)*dir)}
+  if(!rows.length)return `<div class="tbl"><div class="meta">${meta}</div><div class="empty">조건에 맞는 데이터가 없어요</div></div>`;
+  return `<div class="tbl"><div class="meta">${meta}</div><table><thead><tr>${cols.map(c=>`<th class="${c.r?'r':''}" onclick="sortBy('${c.k}')">${c.h}${st.sort?.[0]===c.k?(st.sort[1]>0?' ▲':' ▼'):''}</th>`).join('')}</tr></thead>
+  <tbody>${rows.slice(0,500).map(r=>`<tr>${cols.map(c=>`<td class="${c.r?'r':''} ${c.t?'t':''}" title="${c.t?esc(r[c.k]):''}">${c.f?c.f(r[c.k],r):esc(r[c.k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`}
+window.sortBy=k=>{st.sort=st.sort?.[0]===k?[k,-st.sort[1]]:[k,-1];render(true)};
+
+function bars(data){
+  if(!data.length)return '<div class="empty">매출 데이터가 없어요</div>';
+  const W=700,H=220,p=28,max=Math.max(...data.map(d=>d.rev),1),bw=(W-p*2)/data.length;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${[0,.5,1].map(t=>`<line x1="${p}" x2="${W-4}" y1="${H-p-(H-p*2)*t}" y2="${H-p-(H-p*2)*t}" stroke="#eef0f4"/><text x="0" y="${H-p-(H-p*2)*t+4}" font-size="10" fill="#8a91a0">${Math.round(max*t/1000)}k</text>`).join('')}
+  ${data.map((d,i)=>{const h=(H-p*2)*d.rev/max;return `<rect x="${p+i*bw+bw*.15}" y="${H-p-h}" width="${bw*.7}" height="${h}" rx="2" fill="#2563eb"><title>${d.d} · ${won(d.rev)} · ${d.n}건</title></rect>`}).join('')}
+  ${data.filter((_,i)=>i%Math.ceil(data.length/7)===0).map(d=>{const i=data.indexOf(d);return `<text x="${p+i*bw}" y="${H-8}" font-size="10" fill="#8a91a0">${d.d.slice(5)}</text>`}).join('')}</svg>`}
+
+const pages={
+ async home(){
+  const [s,daily,prods,dl]=await Promise.all([api(`/api/summary?days=${st.days}`),api(`/api/daily?days=${st.days}`),api(`/api/products?days=${st.days}`),api(`/api/orders?days=0&delayed=true`)]);
+  const g=s.revenue_prev?((s.revenue/s.revenue_prev-1)*100):null;
+  return head('통합 대시보드','큐텐재팬 wbL公式 매출·주문·배송 현황을 한눈에 봐요')+periods()+
+  `<div class="kpis">${kpi('매출',won(s.revenue),g==null?'결제금액 합계':`직전 동기간 대비 <b class="${g>=0?'green':'red'}">${g>=0?'+':''}${g.toFixed(1)}%</b>`,'blue')}
+  ${kpi('주문 수',nf(s.orders)+'건','결제 완료 기준')}${kpi('객단가',won(s.aov),'매출 ÷ 주문 수')}${kpi('구매 고객',nf(s.buyers)+'명','기간 내 고유 구매자')}
+  ${kpi('미발송 주문',nf(s.open_orders)+'건','배송요청 + 배송준비','orange')}${kpi('배송지연',nf(s.delayed)+'건',`결제 후 ${s.delay_days}일 초과 미발송`,s.delayed?'red':'green')}
+  ${kpi('판매중 상품',nf(s.products)+'개','ItemStatus S2')}${kpi('재고 부족',nf(s.low_stock)+'개','재고 10개 미만',s.low_stock?'orange':'')}</div>
+  <div class="grid2"><div class="panel chart"><div class="ptitle">일별 매출</div>${bars(daily)}</div>
+  <div class="panel"><div class="ptitle">매출 TOP 상품 <a onclick="go('products')">전체 보기 →</a></div>
+  ${prods.filter(p=>p.rev).slice(0,6).map((p,i)=>`<div style="display:flex;gap:8px;padding:7px 0;border-bottom:1px solid #f0f2f6"><b class="blue">${i+1}</b><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</span><b>${won(p.rev)}</b></div>`).join('')||'<div class="empty">판매 없음</div>'}</div></div>
+  <div class="panel"><div class="ptitle">배송지연 주문 <a onclick="go('delay')">전체 보기 →</a></div>
+  ${dl.length?dl.slice(0,5).map(o=>`<div style="display:flex;gap:10px;padding:7px 0;border-bottom:1px solid #f0f2f6;flex-wrap:wrap"><span class="tag red">${o.elapsed}일 경과</span><span>${esc(o.order_no)}</span><span style="flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(o.title)}</span>${stTag(o.status)}</div>`).join(''):'<div class="empty green">지연 주문이 없어요</div>'}</div>`},
+ async products(){
+  const rows=await api(`/api/products?days=${st.days}&q=${encodeURIComponent(st.q)}&flag=${st.flag}`);
+  const rev=rows.reduce((a,r)=>a+r.rev,0);
+  return head('상품별 분석','상품코드 · 상품명으로 검색하고 판매·재고 상태를 확인해요')+periods()+
+  `<div class="kpis">${kpi('검색 결과',rows.length+'개','현재 필터 기준')}${kpi('매출 합계',won(rev),'기간 내 결제금액','blue')}
+  ${kpi('판매 0건 상품',rows.filter(r=>!r.n).length+'개','노출·가격 점검 대상','orange')}${kpi('재고 부족',rows.filter(r=>r.qty<10).length+'개','재고 10개 미만','red')}</div>`+
+  search('상품코드 또는 상품명 입력')+pills([['top','매출 있음'],['nosale','판매 0건'],['low','재고 부족']],'flag')+
+  table(rows,[{k:'item_code',h:'상품번호'},{k:'seller_code',h:'셀러코드'},{k:'title',h:'상품명',t:1},
+   {k:'price',h:'판매가',r:1,f:won},{k:'discount',h:'할인율',r:1,f:v=>v?v.toFixed(0)+'%':'-'},
+   {k:'qty',h:'재고',r:1,f:v=>`<span class="${v<10?'red':''}">${nf(v)}</span>`},{k:'n',h:'주문',r:1,f:nf},{k:'sold',h:'판매수량',r:1,f:nf},
+   {k:'rev',h:'매출',r:1,f:v=>`<b>${won(v)}</b>`},{k:'rev',h:'매출 비중',r:1,f:v=>rev?(v/rev*100).toFixed(1)+'%':'-'},
+   {k:'days_left',h:'재고 소진 예상',r:1,f:v=>v==null?'-':`<span class="${v<14?'red':''}">${Math.round(v)}일</span>`}],
+   `현재 필터 기준 ${rows.length}개 · 매출 ${won(rev)} · 판매중(S2) 상품 기준`)},
+ async delay(){
+  const rows=await api(`/api/orders?days=0&delayed=true&q=${encodeURIComponent(st.q)}`), s=SUM;
+  const b=[[DD()+1,DD()+2],[DD()+3,DD()+6],[DD()+7,9999]].map(([a,z])=>rows.filter(r=>r.elapsed>=a&&r.elapsed<=z).length);
+  return head('배송지연 관리',`결제 후 ${s.delay_days}일이 지나도 발송되지 않은 주문을 모아 봐요`)+
+  `<div class="kpis">${kpi('지연 주문',rows.length+'건','배송요청·배송준비 상태','red')}${kpi(`${DD()+1}~${DD()+2}일 경과`,b[0]+'건','오늘 발송 권장','orange')}
+  ${kpi(`${DD()+3}~${DD()+6}일 경과`,b[1]+'건','고객 안내 필요','red')}${kpi(`${DD()+7}일 이상`,b[2]+'건','취소·페널티 위험','red')}</div>`+
+  search('주문번호, 상품명, 구매자 검색')+
+  table(rows,[{k:'elapsed',h:'경과일',r:1,f:v=>`<span class="tag ${v>DD()+2?'red':'orange'}">${v}일</span>`},{k:'order_no',h:'주문번호'},{k:'pay_date',h:'결제일시'},
+   {k:'title',h:'상품명',t:1},{k:'option',h:'옵션',t:1},{k:'qty',h:'수량',r:1},{k:'amount',h:'금액',r:1,f:won},{k:'buyer',h:'구매자'},{k:'status',h:'상태',f:stTag}],
+   `기준: 결제 후 ${s.delay_days}일 초과 & 미발송 · 서버 환경변수 DELAY_DAYS로 기준 변경`)},
+ async orders(){
+  const rows=await api(`/api/orders?days=${st.days}&status=${encodeURIComponent(st.status)}&q=${encodeURIComponent(st.q)}`);
+  return head('주문 조회','기간·상태별 주문과 송장 정보를 확인해요')+periods()+search('주문번호, 상품명, 구매자, 송장번호 검색')+
+  pills([['배송요청','배송요청'],['배송준비','배송준비'],['배송중','배송중'],['배송완료','배송완료'],['구매확정','구매확정']],'status')+
+  table(rows,[{k:'order_no',h:'주문번호'},{k:'pay_date',h:'결제일시'},{k:'title',h:'상품명',t:1},{k:'qty',h:'수량',r:1},{k:'amount',h:'금액',r:1,f:won},
+   {k:'status',h:'상태',f:stTag},{k:'elapsed',h:'발송 소요',r:1,f:(v,r)=>r.ship_date?`<span class="${r.is_delayed?'red':''}">${v}일</span>`:'-'},{k:'carrier',h:'택배사'},{k:'tracking',h:'송장번호'}],
+   `${rows.length}건 · 합계 ${won(rows.reduce((a,r)=>a+r.amount,0))}`)},
+ async sync(){
+  const rows=await api('/api/sync-log');
+  return head('동기화 히스토리',`큐텐 API에서 자동으로 데이터를 가져온 기록이에요`)+
+  table(rows,[{k:'started',h:'시작'},{k:'finished',h:'종료'},{k:'ok',h:'결과',f:v=>v?'<span class="tag green">성공</span>':'<span class="tag red">실패</span>'},
+   {k:'products',h:'상품',r:1},{k:'orders',h:'주문',r:1},{k:'message',h:'메시지',t:1}],'최근 50회')}
+};
+const DD=()=>SUM?.delay_days??3;
+window.go=p=>{st.page=p;location.hash=p;render()};
+window.doSync=async b=>{b.disabled=true;b.textContent='동기화 중…';try{const r=await api('/api/sync');alert(r.ok?`완료: 상품 ${r.products}개 · 주문 ${r.orders}건`:`실패: ${r.message}`)}catch(e){alert(e)}render()};
+
+async function render(keepFocus){
+  const pos=$('#q')?.selectionStart;
+  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.dataset.p===st.page));
+  try{SUM=await api(`/api/summary?days=${st.days}`);
+    $('#main').innerHTML=await pages[st.page]();
+    const c=$('#delayCt');c.hidden=!SUM.delayed;c.textContent=SUM.delayed;
+    if(SUM.last_sync)$('#lastSync').textContent='마지막 동기화 '+SUM.last_sync.finished.replace('T',' ').slice(5,16);
+  }catch(e){$('#main').innerHTML=`<div class="empty">불러오지 못했어요 (${e.message})</div>`}
+  bindSearch();if(keepFocus&&$('#q')){$('#q').focus();$('#q').setSelectionRange(pos,pos)}
+}
+window.addEventListener('hashchange',()=>{const p=location.hash.slice(1);if(pages[p]&&p!==st.page){st.page=p;st.q='';st.flag='';st.status='';render()}});
+if(!pages[st.page])st.page='home';
+render();
+</script>
+</body>
+</html>
