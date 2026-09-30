@@ -467,6 +467,58 @@ def ai_options(d: OptIn):
     return best
 
 
+class PriceMapIn(BaseModel):
+    values: list
+    url: str = "https://wblbeauty.com/product/list.html?cate_no=1105"
+    base_krw: float = 17900
+    base_jpy: float = 2400
+
+
+PRICE_SYSTEM = """あなたは日韓EC担当者です。Qoo10のオプション(日本語)が、韓国自社モールのどの商品に当たるかを対応付けます。
+入力: オプション一覧(番号付き)と、韓国モールの商品一覧テキスト(商品名・販売価格)。
+- 名前の意味・モチーフ(例: スワール=스왈, パール=진주, ハート=하트, リボン=리본, 蝶=나비, クローバー=클로버)で最も近い商品を選ぶ。
+- 販売価格は割引後の「판매가」(小さい方の価格)を使う。消費者価格は使わない。
+- 自信がない場合は confidence を low に。該当なしは kr_name を空、kr_price を0に。
+必ず次のJSONだけを出力: {"rows":[{"i":1,"kr_name":"","kr_price":0,"confidence":"high|mid|low"}]}"""
+
+
+@app.post("/api/ai/price-map", dependencies=[Depends(auth)])
+def ai_price_map(d: PriceMapIn):
+    import requests as rq
+    if not AI_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY가 없어요")
+    vals = [str(v).strip() for v in d.values if str(v).strip()]
+    if not vals:
+        raise HTTPException(400, "옵션 값이 없어요")
+    try:
+        page = rq.get(d.url, timeout=30, headers={"User-Agent": "Mozilla/5.0"}).text
+    except Exception as e:
+        raise HTTPException(502, f"자사몰 페이지를 가져오지 못했어요: {e}")
+    text = _strip_html(page)[:15000]
+    user = "オプション一覧:\n" + "\n".join(f"{i}. {v}" for i, v in enumerate(vals, 1)) + f"\n\n韓国モール商品一覧テキスト:\n{text}"
+    r = rq.post("https://api.anthropic.com/v1/messages", timeout=120,
+                headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": AI_MODEL, "max_tokens": 4000, "system": PRICE_SYSTEM, "messages": [{"role": "user", "content": user}]})
+    if r.status_code != 200:
+        raise HTTPException(502, f"AI 호출 실패 {r.status_code}: {r.text[:200]}")
+    t = "".join(b.get("text", "") for b in r.json().get("content", []))
+    try:
+        rows = json.loads(t[t.index("{"): t.rindex("}") + 1])["rows"]
+    except (ValueError, KeyError):
+        raise HTTPException(502, "AI 응답 해석 실패: " + t[:200])
+    ratio = d.base_jpy / d.base_krw
+    out = []
+    for row in rows:
+        i = int(row.get("i", 0)) - 1
+        if not 0 <= i < len(vals):
+            continue
+        kp = num(row.get("kr_price") or 0)
+        add = round((kp * ratio - d.base_jpy) / 10) * 10 if kp else None
+        out.append({"value": vals[i], "kr_name": row.get("kr_name", ""), "kr_price": kp, "add": add,
+                    "confidence": row.get("confidence", "low"), "over_cap": add is not None and abs(add) > d.base_jpy * 0.5})
+    return {"ratio": ratio, "rows": out}
+
+
 class RegisterIn(BaseModel):
     params: dict
     confirm: bool = False
