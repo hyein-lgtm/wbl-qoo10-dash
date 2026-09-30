@@ -82,7 +82,7 @@ main{padding:18px 16px 60px}.menu-btn{display:inline-block}}
   <div class="grp">상품</div>
   <nav>
     <a data-p="register">＋ 상품 등록</a>
-    <a data-p="patch">✎ 이미지·옵션 수정</a>
+    <a data-p="patch">✎ 상품 수정</a>
     <a data-p="reglog">✓ 등록 이력</a>
   </nav>
   <div class="grp">관리</div>
@@ -217,16 +217,32 @@ const pages={
    <div style="margin-top:12px"><button class="btn pri" id="regBtn" onclick="doRegister()">큐텐에 등록하기</button></div>
    <div id="regResult"></div></div>`},
  async patch(){
-  const prods=await api('/api/products?days=90');
-  return head('이미지·옵션 수정','이미 등록된 상품에 추가이미지(갤러리)와 선택 옵션을 넣어요')+
-  `<div class="panel"><div class="step"><i>1</i>상품 선택</div><div class="form">
-    <div class="f wide"><label>상품 <b>*</b></label><select id="p_code"><option value="">— 선택 —</option>${prods.map(p=>`<option value="${esc(p.item_code)}" data-sc="${esc(p.seller_code||'')}" ${R.pcode===p.item_code?'selected':''}>${esc(p.item_code)} · ${esc(p.title||'')}</option>`).join('')}</select>
-    <div class="hint">목록에 없으면 동기화 후 다시 열거나, 아래에 상품번호를 직접 입력하세요</div></div>
-    <div class="f"><label>상품번호 직접 입력</label><input id="p_code2" placeholder="1219648670" value="${esc(R.pcode||'')}"></div></div></div>
-  <div class="panel"><div class="step"><i>2</i>추가이미지</div>${galleryBlock(false)}</div>
-  <div class="panel"><div class="step"><i>3</i>선택 옵션</div>${optionBlock()}</div>
-  <div class="panel"><div class="desc" style="margin-bottom:10px">비워 둔 항목은 바꾸지 않아요. 넣은 항목은 큐텐의 기존 추가이미지·옵션을 <b>덮어써요</b>.</div>
-   <button class="btn pri" id="patchBtn" onclick="doPatch()">큐텐에 적용하기</button><div id="patchResult"></div></div>`},
+  const [prods,regs]=await Promise.all([api('/api/products?days=90'),api('/api/registrations')]);
+  const mine=regs.filter(r=>r.ok&&r.gd_no),mineSet=new Set(mine.map(r=>r.gd_no));
+  const opt=(code,label,sc)=>`<option value="${esc(code)}" data-sc="${esc(sc||'')}" ${E.code===code?'selected':''}>${esc(label)}</option>`;
+  const F=(k,l,o={})=>`<div class="f ${o.wide?'wide':''}"><label>${l}${E.orig[k]!==undefined&&String(E.v[k]??'')!==String(E.orig[k]??'')?' <span class="tag orange">변경됨</span>':''}</label>${o.ta?`<textarea id="e_${k}" style="${o.style||''}">${esc(E.v[k]??'')}</textarea>`:`<input id="e_${k}" type="${o.type||'text'}" value="${esc(E.v[k]??'')}">`}${o.hint?`<div class="hint">${o.hint}</div>`:''}</div>`;
+  return head('상품 수정','등록된 상품을 불러와서 바꾼 부분만 큐텐에 반영해요')+
+  `<div class="panel"><div class="step"><i>1</i>수정할 상품 불러오기</div><div class="form">
+    <div class="f wide"><label>상품</label><select id="p_code"><option value="">— 선택 —</option>
+     ${mine.length?`<optgroup label="에이전트로 등록한 상품">${mine.map(r=>opt(r.gd_no,`${r.gd_no} · ${r.title}`,r.seller_code)).join('')}</optgroup>`:''}
+     <optgroup label="판매중 전체 상품">${prods.filter(p=>!mineSet.has(p.item_code)).map(p=>opt(p.item_code,`${p.item_code} · ${p.title||''}`,p.seller_code)).join('')}</optgroup></select></div>
+    <div class="f"><label>상품번호 직접 입력</label><input id="p_code2" placeholder="1219648670" value="${esc(E.code||'')}"></div>
+    <div class="f"><label>&nbsp;</label><button class="btn pri" onclick="loadEdit()">불러오기</button></div></div><div class="hint" id="loadMsg">${E.loaded?`상품 ${esc(E.code)} 불러옴 · 바꾼 칸에 <span class="tag orange">변경됨</span> 표시가 붙어요`:''}</div></div>
+  ${E.loaded?`<div class="panel"><div class="step"><i>2</i>기본 정보</div><div class="form">
+    ${F('ItemTitle','상품명 (일본어)',{wide:1,hint:`${[...(E.v.ItemTitle||'')].length}자`})}${F('PromotionName','홍보 문구')}${F('Keyword','검색 키워드')}
+    ${F('SecondSubCat','카테고리 코드')}${F('ShippingNo','배송 템플릿')}${F('ContactInfo','A/S 연락처')}${F('AvailableDateValue','발송까지 영업일',{type:'number'})}</div></div>
+  <div class="panel"><div class="step"><i>3</i>가격·재고</div><div class="form">
+    ${F('ItemPrice','판매가 (엔)',{type:'number'})}${F('RetailPrice','정가 (엔)',{type:'number',hint:E.v.RetailPrice&&E.v.ItemPrice?`할인율 ${Math.round((1-E.v.ItemPrice/E.v.RetailPrice)*100)}%`:''})}${F('ItemQty','재고',{type:'number',hint:'선택 옵션을 넣으면 옵션 재고가 우선이에요'})}</div></div>
+  <div class="panel"><div class="step"><i>4</i>이미지</div><div class="form">
+    <div class="f wide"><label>대표 이미지${E.v.StandardImage!==E.orig.StandardImage?' <span class="tag orange">변경됨</span>':''}</label><input type="file" accept="image/*" onchange="upEdit(this)">
+     <input id="e_StandardImage" value="${esc(E.v.StandardImage||'')}" style="margin-top:6px" placeholder="https://..."><div class="thumbs">${E.v.StandardImage?`<div><img src="${esc(E.v.StandardImage)}"></div>`:''}</div></div></div>
+    ${galleryBlock(false)}<div class="hint">추가이미지를 올리면 큐텐의 기존 추가이미지를 <b>통째로 교체</b>해요. 비워 두면 그대로 둬요.</div></div>
+  <div class="panel"><div class="step"><i>5</i>상세페이지</div>
+    ${E.orig.ItemDescription?'':'<div class="banner" style="margin:0 0 10px">큐텐에서 기존 상세 HTML을 불러오지 못했어요. 바꾸려면 새 HTML을 붙여 넣으세요. 비워 두면 기존 상세는 그대로 유지돼요.</div>'}
+    <div class="grid2">${F('ItemDescription','상세 HTML',{ta:1,style:'min-height:380px;font-family:monospace;font-size:12px'})}<div><label class="desc">미리보기</label><div class="preview" id="epv">${E.v.ItemDescription||''}</div></div></div></div>
+  <div class="panel"><div class="step"><i>6</i>선택 옵션</div>${optionBlock()}<div class="hint">옵션을 넣으면 기존 옵션을 <b>통째로 교체</b>해요. 비워 두면 그대로 둬요.</div></div>
+  <div class="panel"><table class="sumtbl" style="min-width:0" id="esum"></table>
+   <div style="margin-top:12px"><button class="btn pri" id="patchBtn" onclick="doPatch()">바뀐 내용 큐텐에 반영하기</button></div><div id="patchResult"></div></div>`:''}`},
  async reglog(){
   const rows=await api('/api/registrations');
   return head('등록 이력','이 대시보드에서 큐텐에 등록한 상품 기록이에요')+
@@ -282,16 +298,50 @@ function renderOpts(){const o=$('#opts');if(!o)return;o.innerHTML=R.inv.rows.map
 function renderGal(){const g=$('#galThumbs');if(!g)return;g.innerHTML=R.gallery.map((u,i)=>`<div><img src="${u}"><button onclick="R.gallery.splice(${i},1);refreshAll()">✕</button>
   <div style="display:flex;justify-content:space-between;margin-top:2px">${i?`<a class="chip" style="padding:0 6px" onclick="mv(${i},-1)">◀</a>`:'<span></span>'}<span class="hint">${i+1}</span>${i<R.gallery.length-1?`<a class="chip" style="padding:0 6px" onclick="mv(${i},1)">▶</a>`:'<span></span>'}</div></div>`).join('')}
 window.mv=(i,d)=>{const g=R.gallery;[g[i],g[i+d]]=[g[i+d],g[i]];refreshAll()};
-function refreshAll(){readR();renderGal();if(st.page==='register')refreshR();else{const rs=R.inv.rows.filter(r=>r&&r.value);if($('#optSum'))$('#optSum').textContent=rs.length?`${rs.length}개 옵션 · 재고 합계 ${rs.reduce((a,r)=>a+(+r.qty||0),0)}개`:''}}
+function refreshAll(){readR();renderGal();if(st.page==='patch')refreshE();if(st.page==='register')refreshR();else{const rs=R.inv.rows.filter(r=>r&&r.value);if($('#optSum'))$('#optSum').textContent=rs.length?`${rs.length}개 옵션 · 재고 합계 ${rs.reduce((a,r)=>a+(+r.qty||0),0)}개`:''}}
 window.addOpt=()=>{readR();R.inv.rows.push({value:'',price:0,qty:$('#o_qty')?.value||10,code:''});renderOpts();refreshAll()};
 window.bulkOpt=()=>{readR();const q=$('#o_qty').value||10;$('#o_bulk').value.split('\n').map(x=>x.trim()).filter(Boolean).forEach(v=>R.inv.rows.push({value:v,price:0,qty:q,code:''}));$('#o_bulk').value='';renderOpts();refreshAll()};
-window.doPatch=async()=>{readR();const sel=$('#p_code'),code=R.pcode||sel.value;if(!code){alert('상품을 선택하거나 상품번호를 입력해 주세요');return}
-  const sc=sel.selectedOptions[0]?.dataset.sc||'';const inv=invPayload();if(!R.gallery.length&&!inv.rows.length){alert('추가이미지나 옵션을 넣어 주세요');return}
-  if(!confirm(`상품 ${code}의 ${R.gallery.length?'추가이미지 '+R.gallery.length+'장':''} ${inv.rows.length?'옵션 '+inv.rows.length+'개':''}를 큐텐에 덮어써요. 진행할까요?`))return;
-  const b=$('#patchBtn');b.disabled=true;b.textContent='적용 중…';
-  try{const r=await fetch(`/api/items/${code}/patch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seller_code:sc,gallery:R.gallery,options:inv})});const j=await r.json();
-   $('#patchResult').innerHTML=!r.ok?`<div class="result ng">${esc(j.detail)}</div>`:stepResult(j)}catch(e){$('#patchResult').innerHTML=`<div class="result ng">${esc(e.message)}</div>`}
-  b.disabled=false;b.textContent='큐텐에 적용하기'};
+const E={code:'',sc:'',orig:{},v:{},loaded:false};
+const EBASIC=['ItemTitle','PromotionName','Keyword','SecondSubCat','ShippingNo','ContactInfo','AvailableDateValue','RetailPrice'];
+const EKEYS=[...EBASIC,'ItemPrice','ItemQty','StandardImage','ItemDescription'];
+function readE(){EKEYS.forEach(k=>{const e=$('#e_'+k);if(e)E.v[k]=e.value});readR()}
+const clean=v=>v==null?'':(/^-?\d+\.0+$/.test(String(v))?String(parseInt(v)):String(v));
+window.loadEdit=async()=>{const sel=$('#p_code'),code=($('#p_code2').value.trim()||sel.value);if(!code){alert('상품을 선택하거나 상품번호를 입력해 주세요');return}
+  $('#loadMsg').textContent='불러오는 중…';
+  try{const j=await api(`/api/items/${code}/detail`);let o=j.ResultObject;o=Array.isArray(o)?o[0]:(o||{});
+   const f=(...res)=>{for(const re of res)for(const[k,v]of Object.entries(o))if(re.test(k)&&v!==''&&v!=null)return clean(v);return ''};
+   E.orig={ItemTitle:f(/^ItemTitle$/i),PromotionName:f(/^PromotionName$/i),Keyword:f(/^(Keyword|SearchKeyword)$/i),SecondSubCat:f(/^SecondSubCat(Cd)?$/i),
+    ShippingNo:f(/^ShippingNo$/i,/DeliveryGroup/i),ContactInfo:f(/^ContactInfo$/i,/Contact/i),AvailableDateValue:f(/^AvailableDateValue$/i),
+    RetailPrice:f(/^RetailPrice$/i),ItemPrice:f(/^(SellPrice|ItemPrice)$/i),ItemQty:f(/^(ItemQty|Qty|StockQty)$/i),
+    StandardImage:f(/^(StandardImage|ImageUrl|ItemImage|MainImage)$/i,/Image(Url)?$/i),ItemDescription:f(/^(ItemDescription|ItemDetail|Contents|DetailContents|ItemContents)$/i)};
+   if(E.orig.RetailPrice==='0')E.orig.RetailPrice='';
+   E.code=code;E.sc=sel.selectedOptions[0]?.value===code?(sel.selectedOptions[0].dataset.sc||''):clean(o.SellerCode||'');
+   if(!E.sc)E.sc=clean(o.SellerCode||'');E.v={...E.orig};E.loaded=true;E.raw=o;R.gallery=[];R.inv={name:'',rows:[]};render()}
+  catch(e){$('#loadMsg').textContent='불러오기 실패: '+e.message}};
+window.upEdit=async inp=>{const fd=new FormData();fd.append('file',inp.files[0]);const r=await fetch('/api/images',{method:'POST',body:fd});const j=await r.json();
+  if(!r.ok){alert(j.detail);return}readE();E.v.StandardImage=j.url;render()};
+function editPayload(){readE();const ch=k=>String(E.v[k]??'')!==String(E.orig[k]??'');const p={seller_code:E.sc};
+  if(EBASIC.some(ch)){p.basic={AdultYN:'N',AvailableDateType:'0'};EBASIC.forEach(k=>{if(E.v[k])p.basic[k]=E.v[k]})}
+  if(ch('ItemPrice')||ch('ItemQty'))p.price_qty={price:E.v.ItemPrice,qty:E.v.ItemQty};
+  if(ch('StandardImage')&&E.v.StandardImage)p.image=E.v.StandardImage;
+  if(ch('ItemDescription')&&E.v.ItemDescription)p.description=E.v.ItemDescription;
+  p.gallery=R.gallery;p.options=invPayload();return p}
+function refreshE(){if(st.page!=='patch'||!E.loaded)return;const p=editPayload(),rows=[];
+  if(p.basic)rows.push(['기본 정보',EBASIC.filter(k=>String(E.v[k]??'')!==String(E.orig[k]??'')).join(', ')]);
+  if(p.price_qty)rows.push(['가격·재고',`${won(E.orig.ItemPrice)} → ${won(E.v.ItemPrice)} · 재고 ${E.orig.ItemQty||'-'} → ${E.v.ItemQty}`]);
+  if(p.image)rows.push(['대표 이미지','교체']);if(p.description)rows.push(['상세 HTML','교체']);
+  if(p.gallery.length)rows.push(['추가이미지',`${p.gallery.length}장으로 교체`]);if(p.options.rows.length)rows.push(['선택 옵션',`${p.options.rows.length}개로 교체`]);
+  $('#esum').innerHTML=rows.length?rows.map(([a,b])=>`<tr><td>${a}</td><td>${esc(b)}</td></tr>`).join(''):'<tr><td colspan=2 class="desc">아직 바뀐 내용이 없어요</td></tr>';
+  const pv=$('#epv');if(pv)pv.innerHTML=E.v.ItemDescription||''}
+window.doPatch=async()=>{const p=editPayload();const n=[p.basic,p.price_qty,p.image,p.description].filter(Boolean).length+(p.gallery.length?1:0)+(p.options.rows.length?1:0);
+  if(!n){alert('바뀐 내용이 없어요');return}if(!confirm(`상품 ${E.code}에 ${n}개 항목을 반영해요. 진행할까요?`))return;
+  const b=$('#patchBtn');b.disabled=true;b.textContent='반영 중…';
+  try{const r=await fetch(`/api/items/${E.code}/update`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});const j=await r.json();
+   if(!r.ok)throw new Error(j.detail);const L={basic:'기본 정보',price_qty:'가격·재고',image:'대표 이미지',description:'상세 HTML',gallery:'추가이미지',options:'선택 옵션',gallery_options:'이미지·옵션'};
+   const allOk=j.ok;$('#patchResult').innerHTML=`<div class="result ${allOk?'ok':'ng'}">${Object.entries(j.steps).map(([k,x])=>`<div>${String(x.ResultCode)==='0'?'✅':'❌'} ${L[k]||k}: ${esc(x.ResultMsg||x.ErrorMsg||'')}</div>`).join('')}
+    <details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify(j.steps,null,1))}</pre></details></div>`;
+   if(allOk){Object.assign(E.orig,E.v)}}
+  catch(e){$('#patchResult').innerHTML=`<div class="result ng">${esc(e.message)}</div>`}b.disabled=false;b.textContent='바뀐 내용 큐텐에 반영하기'};
 function stepResult(j){const line=(t,x)=>x==null?'':`<div>${x.ResultCode==0||x.ResultCode==='0'?'✅':'❌'} ${t}: ${esc(x.ResultMsg||x.ErrorMsg||'')}</div>`;
   const allOk=[j.gallery,j.options].every(x=>x==null||String(x.ResultCode)==='0');
   return `<div class="result ${allOk?'ok':'ng'}">${line('추가이미지',j.gallery)}${line('선택 옵션',j.options)}<details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify({gallery:j.gallery,options:j.options},null,1))}</pre></details></div>`}
@@ -317,7 +367,8 @@ window.doRegister=async()=>{const p=buildParams(),b=$('#regBtn');if(!$('#confirm
   try{const r=await fetch('/api/items/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({params:p,confirm:true,gallery:R.gallery,options:invPayload()})});const j=await r.json();
    $('#regResult').innerHTML=!r.ok?`<div class="result ng">등록 전 확인 필요: ${esc(j.detail)}</div>`:j.ok?`<div class="result ok"><b>등록 성공</b> — 상품번호 ${esc(j.gd_no)}. QSM에서 노출 상태를 확인해 주세요.</div>${(j.gallery||j.options)?stepResult(j):''}`:`<div class="result ng"><b>큐텐이 거절했어요</b>: ${esc(j.message)}<details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify(j.raw,null,1))}</pre></details></div>`}
   catch(e){$('#regResult').innerHTML=`<div class="result ng">${esc(e.message)}</div>`}b.disabled=false;b.textContent='큐텐에 등록하기'};
-function bindRegister(){if(st.page==='patch'){renderOpts();renderGal();const s=$('#p_code');s.onchange=()=>{$('#p_code2').value=s.value;R.pcode=s.value};$('#p_code2').oninput=()=>R.pcode=$('#p_code2').value.trim();$('#o_name').oninput=readR;return}
+function bindRegister(){if(st.page==='patch'){const s=$('#p_code');s.onchange=()=>{$('#p_code2').value=s.value};if(!E.loaded)return;renderOpts();renderGal();refreshE();
+    document.querySelectorAll('[id^=e_],#o_name').forEach(e=>e.addEventListener('input',refreshE));return}
   if(st.page!=='register')return;renderOpts();renderGal();refreshR();$('#toDesc').onchange=refreshAll;$('#o_name').oninput=refreshAll;
   document.querySelectorAll('[id^=r_]').forEach(e=>{e.addEventListener('input',refreshR);e.addEventListener('change',refreshR)});
   $('#r_clone').onchange=e=>{R.v.clone=e.target.value;cloneFrom(e.target.value)}}
