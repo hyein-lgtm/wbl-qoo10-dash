@@ -397,6 +397,76 @@ def ai_draft(d: DraftIn):
         raise HTTPException(502, "AI 응답을 해석하지 못했어요: " + text[:300])
 
 
+class OptIn(BaseModel):
+    html: str = ""
+    item_code: str = ""
+
+
+OPT_SYSTEM = """あなたはQoo10 Japanの出品担当者です。商品詳細ページ(HTMLテキストと画像)から、購入者が選ぶ「選択肢(バリエーション)」を抽出します。
+- 例: 「選べる20種」のデザイン一覧、カラー、サイズ、セット内容の選択など。
+- 表記はページに書かれている通りに(記号・番号・カタカナを変えない)。例: "A.スワール" のように記号+名前がある場合はそのまま。
+- 選択肢でないもの(特徴、使い方、注意事項、成分)は含めない。
+- オプション名はページの表記を優先(なければ「デザイン」「カラー」など適切な日本語)。
+- 見つからない場合は values を空配列に。
+必ず次のJSONだけを出力: {"name":"","values":[],"found_in":"text|image|none","note":""}"""
+
+
+def _strip_html(h):
+    import re, html as _h
+    t = re.sub(r"(?is)<(script|style).*?</\1>", " ", h)
+    t = re.sub(r"(?s)<[^>]+>", " ", t)
+    return re.sub(r"\s+", " ", _h.unescape(t)).strip()
+
+
+@app.post("/api/ai/options", dependencies=[Depends(auth)])
+def ai_options(d: OptIn):
+    import re, requests as rq
+    if not AI_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY 환경변수가 없어서 옵션을 자동으로 읽을 수 없어요")
+    html = d.html
+    if not html.strip() and d.item_code:  # 기존 상품: 큐텐 상세 페이지에서 직접 가져오기
+        try:
+            r = rq.get(f"https://www.qoo10.jp/gmkt.inc/Goods/GoodsDetailInfo.aspx?goodscode={d.item_code}", timeout=30,
+                       headers={"User-Agent": "Mozilla/5.0"})
+            html = r.text
+        except Exception as e:
+            raise HTTPException(502, f"큐텐 상세 페이지를 가져오지 못했어요: {e}")
+    if not html.strip():
+        raise HTTPException(400, "상세 HTML이 비어 있어요")
+    imgs = []
+    for u in re.findall(r"""<img[^>]+src=["']([^"']+)["']""", html, flags=re.I):
+        u = "https:" + u if u.startswith("//") else u
+        if u.startswith("http") and u not in imgs and not re.search(r"(icon|blank|spacer|logo)", u, re.I):
+            imgs.append(u)
+    text = _strip_html(html)[:6000]
+    best, notes = None, []
+    batches = [imgs[i:i + 20] for i in range(0, min(len(imgs), 60), 20)] or [[]]
+    for batch in batches:
+        content = [{"type": "text", "text": f"詳細ページのテキスト:\n{text or '(なし)'}\n\n以下は詳細ページの画像です(順番通り)。"}]
+        content += [{"type": "image", "source": {"type": "url", "url": u}} for u in batch]
+        r = rq.post("https://api.anthropic.com/v1/messages", timeout=120,
+                    headers={"x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={"model": AI_MODEL, "max_tokens": 1500, "system": OPT_SYSTEM,
+                          "messages": [{"role": "user", "content": content}]})
+        if r.status_code != 200:
+            notes.append(f"AI 호출 실패 {r.status_code}: {r.text[:200]}")
+            continue
+        t = "".join(b.get("text", "") for b in r.json().get("content", []))
+        try:
+            j = json.loads(t[t.index("{"): t.rindex("}") + 1])
+        except ValueError:
+            notes.append("AI 응답 해석 실패")
+            continue
+        if j.get("values") and (not best or len(j["values"]) > len(best["values"])):
+            best = j
+        if best and len(best["values"]) >= 2:
+            break
+    if not best:
+        return {"name": "", "values": [], "found_in": "none", "note": " / ".join(notes) or "옵션을 찾지 못했어요", "images": len(imgs)}
+    best["images"] = len(imgs)
+    return best
+
+
 class RegisterIn(BaseModel):
     params: dict
     confirm: bool = False
