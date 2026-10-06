@@ -916,6 +916,7 @@ TITLE_REVIEW_SYSTEM = """あなたはQoo10 Japanに出品する韓国ブラン�
 3) 薬機法・景表法(効能効果、No.1、最安などがないか)
 4) 検索性(主要語「耳つぼジュエリー」が前方にあるか)
 各商品に verdict(ok/fix) と、fixなら短い理由(韓国語)と修正案(日本語の商品名全文)を。問題がなければ suggestion は空。
+修正案のルール: 元の商品名より短くしない。必ず「【公式】wbL 耳つぼジュエリー {ライン名} 1箱20粒（1シート） {色・サイズ} 耳ツボ 耳つぼシール 貼るピアス 穴あけ不要 ギフト」の形に合わせる。ライン名・色名は元の表記を変えない。
 必ずJSONのみ: {"results":[{"i":1,"verdict":"ok","reason":"","suggestion":""}]}"""
 
 
@@ -964,8 +965,8 @@ def _check_detail(code):
             imgs.append(u)
     text = _strip_html(html)
     issues = []
-    if not imgs and len(text) < 80:
-        issues.append("상세가 비어 있어요")
+    if not imgs:
+        issues.append("상세 이미지를 읽지 못했어요 — '열기'로 직접 확인 필요 (서버에서 큐텐 페이지 접근이 막혔을 수 있어요)")
     if re.search(r"[가-힣]{2,}", text):
         issues.append("상세 글에 한글이 있어요")
     http_imgs = [u for u in imgs if u.startswith("http:")]
@@ -991,6 +992,26 @@ def _check_detail(code):
     if big:
         issues.append(f"10MB 넘는 이미지 {len(big)}개 (로딩 느림)")
     return {"ok": not issues, "issues": issues, "imgs": len(imgs), "broken": broken[:10], "mb": round(total_mb, 1), "url": url}
+
+
+def _title_map():
+    try:
+        return json.loads(Path(__file__).with_name("title_map.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {"by_code": {}, "by_line": {}}
+
+
+def _proposal(code, title, ai_sug, R):
+    """수정안: ① 정리표 확정 상품명 ② 같은 라인명의 정리표 상품명 ③ 규칙을 통과한 AI 제안"""
+    tm = _title_map()
+    if code in tm["by_code"]:
+        return tm["by_code"][code]["title"], "정리표"
+    for line, v in sorted(tm["by_line"].items(), key=lambda x: -len(x[0])):
+        if line.replace(" ", "") in (title or "").replace(" ", ""):
+            return v["title"], f"정리표({v['no']})"
+    if ai_sug and len(ai_sug) >= 40 and not [c for c in check_title(ai_sug, "", R) if c["level"] == "error"]:
+        return ai_sug, "AI"
+    return "", ""
 
 
 def _audit_worker(ai):
@@ -1024,6 +1045,11 @@ def _audit_worker(ai):
             except Exception as e:
                 for r in chunk:
                     r["ai"] = {"verdict": "error", "reason": str(getattr(e, "detail", e))}
+    for r in out:
+        ai_r = r.get("ai") or {}
+        sug, src = _proposal(r["item_code"], r["title"], ai_r.get("suggestion", "") if ai_r.get("verdict") == "fix" else "", R)
+        if sug and sug != r["title"]:
+            r["proposal"], r["proposal_src"] = sug, src
     AUDIT.update(running=False, results=out)
 
 
@@ -1037,6 +1063,32 @@ def audit_run(d: AuditIn):
         return {"ok": False, "message": "이미 검수 중이에요"}
     threading.Thread(target=_audit_worker, args=(d.ai,), daemon=True).start()
     return {"ok": True}
+
+
+class AuditApplyIn(BaseModel):
+    items: list   # [{"code","title"}]
+
+
+@app.post("/api/audit/apply", dependencies=[Depends(auth)])
+def audit_apply(d: AuditApplyIn):
+    R = rules()
+    out = []
+    for it in d.items:
+        code, title = str(it.get("code", "")), str(it.get("title", "")).strip()
+        errs = [c["msg"] for c in check_title(title, "", R, code) if c["level"] == "error"]
+        if errs:
+            out.append({"code": code, "ok": False, "message": "검수 통과 못함: " + " / ".join(errs)}); continue
+        res = update_basic(code, {"ItemCode": code, "SellerCode": ""}, {"ItemTitle": title})
+        ok = str(res.get("ResultCode")) == "0"
+        out.append({"code": code, "ok": ok, "message": res.get("ResultMsg") or res.get("ErrorMsg") or ""})
+        if ok:
+            with db() as c:
+                c.execute("UPDATE products SET title=? WHERE item_code=?", (title, code))
+            for r in AUDIT["results"]:
+                if r["item_code"] == code:
+                    r["title"], r["applied"] = title, True
+        time.sleep(0.3)
+    return {"results": out}
 
 
 @app.get("/api/audit/status", dependencies=[Depends(auth)])
