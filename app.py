@@ -815,7 +815,8 @@ async def sheet_parse(file: UploadFile = File(...)):
 
 # ── 간편 신규 등록 (자사몰 상품번호 + 폴더) ────────────────────
 RULES_DEFAULT = {
-    "title_template": "【公式】耳つぼジュエリー {line} 1箱20粒（1シート） {variant} 耳ツボ 耳つぼシール 貼るピアス 穴あけ不要 ギフト",
+    "title_template": "【公式】wbL 耳つぼジュエリー {line} 1箱20粒（1シート） {variant} 耳ツボ 耳つぼシール 貼るピアス 穴あけ不要 ギフト",
+    "required_words": "wbL, 耳つぼジュエリー",
     "base_keywords": "耳ツボジュエリー, 耳ツボシール, 耳つぼピアス, ジュエリーシール, 耳つぼシート, イヤージュエリー, 耳ツボピアス, シールピアス, プレゼント",
     "banned_words": "小顔, 痩せる, ダイエット効果, 治る, 効く, 効果, No.1, 最安, 医療",
     "category": "320001861", "brand": "139162", "shipping": "813346", "contact": "cx@wisland.co.kr",
@@ -876,6 +877,173 @@ DRAFT_NEW_SYSTEM = """あなたはQoo10 Japan「wbL公式」の出品担当で�
 必ずJSONのみ: {"kr_name":"","price":0,"consumer":0,"line":"","options":[{"name":"カラー","values":[""]}],"promo":"","motif":[]}"""
 
 
+def check_title(title, promo="", R=None, exclude_code=""):
+    """상품명 검수 — error(등록 차단) / warn(확인 권장)"""
+    import re
+    R = R or rules()
+    out = []
+    t = title or ""
+    for w in [x.strip() for x in str(R.get("required_words", "")).split(",") if x.strip()]:
+        if w.lower() not in t.lower():
+            out.append({"level": "error", "msg": f"필수 단어 '{w}'가 없어요"})
+    for w in [x.strip() for x in str(R.get("banned_words", "")).split(",") if x.strip()]:
+        if w in t + (promo or ""):
+            out.append({"level": "error", "msg": f"금지어 '{w}'"})
+    if len(t) > int(R.get("max_title", 100)):
+        out.append({"level": "error", "msg": f"{len(t)}자 — 최대 {R.get('max_title')}자"})
+    if re.search(r"[가-힣]", t + (promo or "")):
+        out.append({"level": "error", "msg": "한국어(한글)가 섞여 있어요"})
+    if re.search(r"[{}]|\s{2,}|（\s*）|\(\s*\)", t):
+        out.append({"level": "error", "msg": "빈 칸·괄호 등 형식이 깨졌어요"})
+    if len(t) > 75:
+        out.append({"level": "warn", "msg": f"{len(t)}자 — 모바일 목록에서 뒤가 잘려요 (핵심어는 앞 40자 안에)"})
+    if promo and len(promo) > 20:
+        out.append({"level": "warn", "msg": f"広告文 {len(promo)}자 — 20자 이내 권장"})
+    tail = R["title_template"].split("{variant}")[-1].strip()
+    if tail and tail not in t:
+        out.append({"level": "warn", "msg": "상품명 뒷부분이 규칙 형식과 달라요"})
+    with db() as c:
+        dup = c.execute("SELECT item_code FROM products WHERE title=? AND item_code<>?", (t, exclude_code)).fetchone()
+    if dup:
+        out.append({"level": "warn", "msg": f"같은 상품명이 이미 있어요 ({dup['item_code']}) — 중복 출품 주의"})
+    return out
+
+
+TITLE_REVIEW_SYSTEM = """あなたはQoo10 Japanに出品する韓国ブランド「wbL」(クワイエットラグジュアリー、耳つぼジュエリー)のブランドマネージャーです。
+商品名と広告文を日本人の購入者目線で検品します。確認点:
+1) 日本語として自然か(不自然なカタカナ、誤字、韓国語直訳、重複語)
+2) ブランドの品位(安っぽい煽り、記号の乱用、誇大表現がないか)
+3) 薬機法・景表法(効能効果、No.1、最安などがないか)
+4) 検索性(主要語「耳つぼジュエリー」が前方にあるか)
+各商品に verdict(ok/fix) と、fixなら短い理由(韓国語)と修正案(日本語の商品名全文)を。問題がなければ suggestion は空。
+必ずJSONのみ: {"results":[{"i":1,"verdict":"ok","reason":"","suggestion":""}]}"""
+
+
+class TitleCheckIn(BaseModel):
+    items: list                      # [{"title","promo","code"}]
+    ai: bool = False
+
+
+@app.post("/api/title/check", dependencies=[Depends(auth)])
+def title_check(d: TitleCheckIn):
+    R = rules()
+    res = [{"checks": check_title(i.get("title", ""), i.get("promo", ""), R, str(i.get("code", "")))} for i in d.items]
+    if d.ai and d.items:
+        for start in range(0, len(d.items), 20):
+            chunk = d.items[start:start + 20]
+            user = "\n".join(f"{k}. 商品名: {i.get('title','')}\n   広告文: {i.get('promo','')}" for k, i in enumerate(chunk, 1))
+            try:
+                j = _ai(TITLE_REVIEW_SYSTEM, user, 4000)
+                for r in j.get("results", []):
+                    k = start + int(r.get("i", 0)) - 1
+                    if 0 <= k < len(res):
+                        res[k]["ai"] = r
+            except HTTPException as e:
+                for k in range(start, start + len(chunk)):
+                    res[k]["ai"] = {"verdict": "error", "reason": str(e.detail)}
+    return {"results": res}
+
+
+# ── 등록 상품 검수 (상품명 + 상세페이지 + 재고) ─────────────────
+AUDIT = {"running": False, "done": 0, "total": 0, "started": "", "results": []}
+
+
+def _check_detail(code):
+    """큐텐 상세 전용 페이지를 읽어 이미지가 실제로 열리는지 확인"""
+    import re, requests as rq
+    from concurrent.futures import ThreadPoolExecutor
+    url = f"https://www.qoo10.jp/gmkt.inc/Goods/GoodsDetailInfo.aspx?goodscode={code}"
+    try:
+        html = rq.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"}).text
+    except Exception as e:
+        return {"ok": False, "issues": [f"상세 페이지를 열지 못했어요 ({e.__class__.__name__})"], "imgs": 0}
+    imgs = []
+    for u in re.findall(r"""<img[^>]+src=["']([^"']+)["']""", html, flags=re.I):
+        u = "https:" + u if u.startswith("//") else u
+        if u.startswith("http") and "qoo10.jp/images" not in u and u not in imgs:
+            imgs.append(u)
+    text = _strip_html(html)
+    issues = []
+    if not imgs and len(text) < 80:
+        issues.append("상세가 비어 있어요")
+    if re.search(r"[가-힣]{2,}", text):
+        issues.append("상세 글에 한글이 있어요")
+    http_imgs = [u for u in imgs if u.startswith("http:")]
+    if http_imgs:
+        issues.append(f"http 이미지 {len(http_imgs)}개 (https 아니면 안 보일 수 있어요)")
+
+    def head(u):
+        try:
+            r = rq.get(u, timeout=20, stream=True, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.qoo10.jp/"})
+            size = int(r.headers.get("content-length") or 0)
+            ctype = r.headers.get("content-type", "")
+            r.close()
+            return u, r.status_code, size, ctype
+        except Exception as e:
+            return u, 0, 0, str(e.__class__.__name__)
+    with ThreadPoolExecutor(12) as ex:
+        res = list(ex.map(head, imgs[:120]))
+    broken = [u for u, st, sz, ct in res if st != 200 or ("image" not in ct and ct)]
+    total_mb = sum(sz for _, _, sz, _ in res) / 1048576
+    if broken:
+        issues.append(f"깨진 이미지 {len(broken)}개")
+    big = [u for u, st, sz, ct in res if sz > 10 * 1048576]
+    if big:
+        issues.append(f"10MB 넘는 이미지 {len(big)}개 (로딩 느림)")
+    return {"ok": not issues, "issues": issues, "imgs": len(imgs), "broken": broken[:10], "mb": round(total_mb, 1), "url": url}
+
+
+def _audit_worker(ai):
+    R = rules()
+    with db() as c:
+        prods = [dict(r) for r in c.execute("SELECT item_code, seller_code, title, price, qty FROM products")]
+    AUDIT.update(running=True, done=0, total=len(prods), started=datetime.now().isoformat(timespec="seconds"), results=[])
+    out = []
+    for p in prods:
+        row = {"item_code": p["item_code"], "title": p["title"], "price": p["price"], "qty": p["qty"],
+               "link": f"https://www.qoo10.jp/g/{p['item_code']}"}
+        row["title_checks"] = check_title(p["title"] or "", "", R, p["item_code"])
+        if not p["title"]:
+            row["title_checks"].append({"level": "error", "msg": "상품명을 못 읽었어요 (동기화 확인)"})
+        if (p["qty"] or 0) <= 0:
+            row["title_checks"].append({"level": "error", "msg": "재고 0 — 고객에게 '在庫がありません'으로 보여요"})
+        row["detail"] = _check_detail(p["item_code"])
+        out.append(row)
+        AUDIT["done"] += 1
+        AUDIT["results"] = out
+    if ai and out:
+        for s in range(0, len(out), 20):
+            chunk = out[s:s + 20]
+            user = "\n".join(f"{k}. 商品名: {r['title']}" for k, r in enumerate(chunk, 1))
+            try:
+                j = _ai(TITLE_REVIEW_SYSTEM, user, 4000)
+                for r in j.get("results", []):
+                    k = s + int(r.get("i", 0)) - 1
+                    if 0 <= k < len(out):
+                        out[k]["ai"] = r
+            except Exception as e:
+                for r in chunk:
+                    r["ai"] = {"verdict": "error", "reason": str(getattr(e, "detail", e))}
+    AUDIT.update(running=False, results=out)
+
+
+class AuditIn(BaseModel):
+    ai: bool = True
+
+
+@app.post("/api/audit/run", dependencies=[Depends(auth)])
+def audit_run(d: AuditIn):
+    if AUDIT["running"]:
+        return {"ok": False, "message": "이미 검수 중이에요"}
+    threading.Thread(target=_audit_worker, args=(d.ai,), daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/audit/status", dependencies=[Depends(auth)])
+def audit_status():
+    return AUDIT
+
+
 class NewDraftIn(BaseModel):
     no: str
     html: str = ""
@@ -927,10 +1095,8 @@ def new_draft(d: NewDraftIn):
         warn.append(f"상품명이 {len(title)}자로 길어요 (최대 {R['max_title']})")
     keywords = [k.strip() for k in (j.get("motif") or []) + R["base_keywords"].split(",") if k.strip()]
     promo = (j.get("promo") or "").strip()
-    banned = [w.strip() for w in R["banned_words"].split(",") if w.strip()]
-    hit = [w for w in banned if w in title + promo]
-    if hit:
-        warn.append("금지어 포함: " + ", ".join(hit))
+    checks = check_title(title, promo, R)
+    warn += [("⛔ " if c["level"] == "error" else "") + c["msg"] for c in checks]
     rows = []
     if len(opts) == 2:
         for v1 in opts[0]["values"]:
@@ -1019,6 +1185,10 @@ def patch_item(code: str, body: PatchIn):
 def register_item(body: RegisterIn):
     p = {k: str(v).strip() for k, v in body.params.items() if str(v).strip() != ""}
     p.setdefault("ContactInfo", CONTACT)
+    errs = [c["msg"] for c in check_title(p.get("ItemTitle", ""), p.get("PromotionName", "")) if c["level"] == "error"]
+    if errs and not body.params.get("_force"):
+        raise HTTPException(400, "상품명 검수에서 막혔어요: " + " / ".join(errs))
+    p.pop("_force", None)
     missing = [k for k in REQUIRED if k not in p]
     if missing:
         raise HTTPException(400, "필수 항목이 비어 있어요: " + ", ".join(missing))
