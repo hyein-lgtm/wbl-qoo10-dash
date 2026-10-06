@@ -227,7 +227,10 @@ const pages={
     <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="a_ai" checked> AI 상품명 검수 포함 (일본어 자연스러움·브랜드 톤·약기법)</label>
     <span class="desc" id="a_msg"></span></div>
     <div class="hint">먼저 ⟳ 지금 동기화로 최신 상품 목록을 받은 뒤 실행하세요. 상품 30개 기준 2~4분 걸려요. 상세 이미지가 실제로 열리는지 하나하나 확인해요.</div></div>
-   <div class="panel chips" id="a_filter"></div><div id="atable"></div>`},
+   <div class="panel chips" id="a_filter"></div>
+   <div class="panel" id="a_fixbar" style="display:none"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn pri" id="a_apply" onclick="auditApply()">✓ 체크한 수정안을 큐텐에 반영</button><span class="desc" id="a_amsg"></span></div>
+    <div class="hint">수정안은 ① 정리표에서 확정한 상품명(+wbL) ② 같은 라인명의 정리표 상품명 ③ 규칙 검수를 통과한 AI 제안 순서로 골라요. 칸에서 직접 고칠 수 있고, 반영 전에 규칙 검수를 한 번 더 거쳐요.</div></div>
+   <div id="atable"></div>`},
  async quick(){
   return head('신규 등록 (간편)','자사몰 상품번호가 붙은 상품 폴더만 고르면, 나머지는 규칙대로 자동으로 채워요')+
   `<div class="panel"><div class="step"><i>1</i>상품 폴더 선택</div>
@@ -425,6 +428,12 @@ async function auditPoll(){clearTimeout(AU.timer);if(st.page!=='audit')return;co
 function auditIssues(r){const t=(r.title_checks||[]).map(c=>({lv:c.level,msg:c.msg,kind:'상품명'}));
   (r.detail?.issues||[]).forEach(x=>t.push({lv:/비어|깨진|열지/.test(x)?'error':'warn',msg:x,kind:'상세'}));
   if(r.ai?.verdict==='fix')t.push({lv:'warn',msg:'AI: '+r.ai.reason,kind:'AI',sug:r.ai.suggestion});return t}
+window.auditApply=async()=>{const items=[];document.querySelectorAll('[data-afix]').forEach(e=>{if(e.checked){const code=e.dataset.afix;const t=document.querySelector(`[data-atitle="${code}"]`).value.trim();if(t)items.push({code,title:t})}});
+  if(!items.length){alert('반영할 수정안을 체크해 주세요');return}if(!confirm(`${items.length}개 상품의 상품명을 큐텐에 반영해요. 진행할까요?`))return;
+  const b=$('#a_apply');b.disabled=true;$('#a_amsg').textContent='반영 중… (상품당 몇 초)';
+  try{const j=await postJ('/api/audit/apply',{items});const ng=j.results.filter(r=>!r.ok);
+   $('#a_amsg').innerHTML=`<b class="${ng.length?'red':'green'}">${j.results.length-ng.length}/${j.results.length}개 반영</b>${ng.length?' · 실패: '+ng.map(r=>`${r.code} (${esc(r.message)})`).join(', '):''}`;auditPoll()}
+  catch(e){$('#a_amsg').textContent='실패: '+e.message}b.disabled=false};
 function renderAudit(){const box=$('#atable'),fb=$('#a_filter');if(!box)return;const rows=AU.res.map(r=>({...r,iss:auditIssues(r)}));
   const nErr=rows.filter(r=>r.iss.some(i=>i.lv==='error')).length,nWarn=rows.filter(r=>r.iss.length&&!r.iss.some(i=>i.lv==='error')).length,nOk=rows.filter(r=>!r.iss.length).length;
   fb.innerHTML=rows.length?`<span class="lbl">보기</span>${[['issue',`문제 있는 상품 ${nErr+nWarn}`],['error',`⛔ 바로 고칠 것 ${nErr}`],['ok',`✓ 통과 ${nOk}`],['all',`전체 ${rows.length}`]].map(([k,l])=>`<button class="chip pill ${AU.f===k?'on':''}" onclick="AU.f='${k}';renderAudit()">${l}</button>`).join('')}`:'';
@@ -432,7 +441,11 @@ function renderAudit(){const box=$('#atable'),fb=$('#a_filter');if(!box)return;c
   box.innerHTML=!rows.length?'':table(list,[{k:'item_code',h:'상품번호',f:(v,r)=>`<a href="${r.link}" target="_blank">${esc(v)}</a>`},{k:'title',h:'상품명',t:1},{k:'qty',h:'재고',r:1,f:v=>`<span class="${v>0?'':'red'}">${nf(v)}</span>`},
    {k:'detail',h:'상세',r:1,f:d=>d?`${d.imgs}장 · ${d.mb}MB ${d.url?`<a href="${d.url}" target="_blank">열기</a>`:''}`:'-'},
    {k:'iss',h:'검수 결과',f:iss=>iss.length?iss.map(i=>`<div class="hint ${i.lv==='error'?'red':'orange'}" style="white-space:normal">${i.lv==='error'?'⛔':'⚠'} [${i.kind}] ${esc(i.msg)}${i.sug?`<br>→ <b>${esc(i.sug)}</b>`:''}</div>`).join(''):'<span class="tag green">통과</span>'}],
-   `상품명·재고·상세 이미지 점검 · 고칠 상품은 ✎ 상품 수정에서 바로 고칠 수 있어요`)}
+   `상품명·재고·상세 이미지 점검 · 고칠 상품은 ✎ 상품 수정에서 바로 고칠 수 있어요`);
+  const fx=$('#a_fixbar');if(fx)fx.style.display=rows.some(r=>r.proposal)?'':'none';
+  const byCode=Object.fromEntries(list.map(r=>[String(r.item_code),r]));box.querySelectorAll('tbody tr').forEach(tr=>{const r=byCode[tr.querySelector('a')?.textContent?.trim()];if(!r||!r.proposal||r.applied)return;const td=document.createElement('td');td.colSpan=5;
+   td.innerHTML=`<label style="display:flex;gap:6px;align-items:center;white-space:normal"><input type="checkbox" data-afix="${esc(r.item_code)}" checked> <span class="tag blue">수정안 · ${esc(r.proposal_src)}</span></label><input data-atitle="${esc(r.item_code)}" value="${esc(r.proposal)}" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px">`;
+   const row=document.createElement('tr');row.appendChild(td);tr.after(row)});}
 
 window.saveRules=async()=>{const keys=['title_template','base_keywords','required_words','banned_words','max_title','base_krw','base_jpy','fx','category','brand','shipping','contact','opt_qty','single_qty','prefix','detail_mb_warn','mall_detail_url'];
   const b={};keys.forEach(k=>{const v=$('#s_'+k).value;b[k]=/^(max_title|base_krw|base_jpy|fx|opt_qty|single_qty|detail_mb_warn)$/.test(k)?+v:v});
