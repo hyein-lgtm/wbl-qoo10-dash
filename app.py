@@ -1006,9 +1006,11 @@ def _proposal(code, title, ai_sug, R):
     tm = _title_map()
     if code in tm["by_code"]:
         return tm["by_code"][code]["title"], "정리표"
-    for line, v in sorted(tm["by_line"].items(), key=lambda x: -len(x[0])):
-        if line.replace(" ", "") in (title or "").replace(" ", ""):
-            return v["title"], f"정리표({v['no']})"
+    multi = any(k in (title or "") for k in ("選べる", "種", "コレクション", "セレクション", "BEST"))
+    if not multi:  # 모음전(여러 디자인)은 라인명으로 맞추지 않음
+        for line, v in sorted(tm["by_line"].items(), key=lambda x: -len(x[0])):
+            if line.replace(" ", "") in (title or "").replace(" ", ""):
+                return v["title"], f"정리표({v['no']})"
     if ai_sug and len(ai_sug) >= 40 and not [c for c in check_title(ai_sug, "", R) if c["level"] == "error"]:
         return ai_sug, "AI"
     return "", ""
@@ -1048,6 +1050,9 @@ def _audit_worker(ai):
     for r in out:
         ai_r = r.get("ai") or {}
         sug, src = _proposal(r["item_code"], r["title"], ai_r.get("suggestion", "") if ai_r.get("verdict") == "fix" else "", R)
+        if sug and any(o["title"] == sug and o["item_code"] != r["item_code"] for o in out):
+            r["dup_note"] = "같은 상품명의 다른 상품이 있어 수정안을 만들지 않았어요 — 둘 중 하나는 판매 종료 필요"
+            sug = ""
         if sug and sug != r["title"]:
             r["proposal"], r["proposal_src"] = sug, src
     AUDIT.update(running=False, results=out)
