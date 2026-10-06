@@ -87,6 +87,7 @@ main{padding:18px 16px 60px}.menu-btn{display:inline-block}}
     <a data-p="batch">📁 폴더 일괄 등록</a>
     <a data-p="patch">✎ 상품 수정</a>
     <a data-p="reglog">✓ 등록 이력</a>
+    <a data-p="audit">🔍 등록 상품 검수</a>
   </nav>
   <div class="grp">관리</div>
   <nav><a data-p="rules">⚙ 등록 규칙</a><a data-p="sync">⟳ 동기화 히스토리</a></nav>
@@ -219,6 +220,14 @@ const pages={
    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="confirm"> 위 내용을 확인했고 큐텐에 <b>${cfg.demo?'(데모) ':''}실제 등록</b>합니다</label>
    <div style="margin-top:12px"><button class="btn pri" id="regBtn" onclick="doRegister()">큐텐에 등록하기</button></div>
    <div id="regResult"></div></div>`},
+ async audit(){
+  return head('등록 상품 검수','판매 중인 큐텐 상품의 일본어 상품명·상세페이지 이미지·재고를 한 번에 점검해요')+
+  `<div class="panel"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <button class="btn pri" id="a_run" onclick="auditRun()">▶ 검수 시작</button>
+    <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="a_ai" checked> AI 상품명 검수 포함 (일본어 자연스러움·브랜드 톤·약기법)</label>
+    <span class="desc" id="a_msg"></span></div>
+    <div class="hint">먼저 ⟳ 지금 동기화로 최신 상품 목록을 받은 뒤 실행하세요. 상품 30개 기준 2~4분 걸려요. 상세 이미지가 실제로 열리는지 하나하나 확인해요.</div></div>
+   <div class="panel chips" id="a_filter"></div><div id="atable"></div>`},
  async quick(){
   return head('신규 등록 (간편)','자사몰 상품번호가 붙은 상품 폴더만 고르면, 나머지는 규칙대로 자동으로 채워요')+
   `<div class="panel"><div class="step"><i>1</i>상품 폴더 선택</div>
@@ -236,7 +245,7 @@ const pages={
   `<div class="panel"><div class="step"><i>1</i>상품명·검색어</div><div class="form">
    ${F('title_template','상품명 형식','{line}=라인명(カタカナ) · {variant}=全5色 / 2サイズ / ゴールド シルバー 등 자동',1)}
    ${F('base_keywords','기본 검색어 (쉼표로 구분)','상품마다 모티브어(花·蝶 등)가 앞에 자동으로 붙어요',1)}
-   ${F('banned_words','금지어 (쉼표로 구분)','상품명·広告文에 들어가면 경고해요 (약기법·경표법)',1)}${F('max_title','상품명 최대 글자')}</div></div>
+   ${F('required_words','필수 단어 (쉼표로 구분)','상품명에 없으면 등록을 막아요 (브랜드 보호)',1)}${F('banned_words','금지어 (쉼표로 구분)','상품명·広告文에 들어가면 등록을 막아요 (약기법·경표법)',1)}${F('max_title','상품명 최대 글자')}</div></div>
   <div class="panel"><div class="step"><i>2</i>가격</div><div class="form">
    ${F('base_krw','기준 한국가 (원)')}${F('base_jpy','기준 큐텐가 (엔)','판매가 = 자사몰가 × 기준 큐텐가 ÷ 기준 한국가')}${F('fx','정가 환율 (원/엔)','정가 = 소비자가 ÷ 환율, 100엔 내림')}</div></div>
   <div class="panel"><div class="step"><i>3</i>고정값</div><div class="form">
@@ -258,7 +267,7 @@ const pages={
     <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="chip" onclick="xPrice()">↻ 가격 다시 계산</button><button class="chip" onclick="xPrice(true)">자사몰 최신가 불러오기</button><span class="desc" id="x_pmsg"></span></div>
     <div class="hint">판매가 = 자사몰 판매가 × (기준 큐텐가 ÷ 기준 한국가), 10엔 단위 · 정가 = 소비자가 ÷ 환율(100엔=930원), 100엔 단위 내림 · 모음전 옵션 추가금 = 디자인 가격 − 모음전 판매가 (±50% 상한, 더 싼 디자인은 +0)</div></div>
   <div class="panel"><div class="step"><i>3</i>확인 후 실행</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn pri" id="x_run" onclick="xRun()">▶ 선택 상품 실행</button><span class="desc" id="x_rmsg"></span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="chip" style="border-color:var(--blue);color:var(--blue)" id="x_chk" onclick="xCheck()">✦ 상품명 전체 검수 (규칙 + AI)</button><button class="btn pri" id="x_run" onclick="xRun()">▶ 선택 상품 실행</button><span class="desc" id="x_rmsg"></span></div>
     <div id="xtable" style="margin-top:12px"></div></div>`},
  async batch(){
   const prods=await api('/api/products?days=90');
@@ -408,8 +417,24 @@ const EBASIC=['ItemTitle','PromotionName','Keyword','SecondSubCat','ShippingNo',
 const EKEYS=[...EBASIC,'ItemPrice','ItemQty','StandardImage','ItemDescription'];
 function readE(){EKEYS.forEach(k=>{const e=$('#e_'+k);if(e)E.v[k]=e.value});readR()}
 const clean=v=>v==null?'':(/^-?\d+\.0+$/.test(String(v))?String(parseInt(v)):String(v));
-const Q={items:[],open:-1};
-window.saveRules=async()=>{const keys=['title_template','base_keywords','banned_words','max_title','base_krw','base_jpy','fx','category','brand','shipping','contact','opt_qty','single_qty','prefix','detail_mb_warn','mall_detail_url'];
+const Q={items:[],open:-1};const AU={res:[],f:'issue',timer:null};
+window.auditRun=async()=>{try{const j=await postJ('/api/audit/run',{ai:$('#a_ai').checked});if(!j.ok){alert(j.message)}auditPoll()}catch(e){alert(e.message)}};
+async function auditPoll(){clearTimeout(AU.timer);if(st.page!=='audit')return;const j=await api('/api/audit/status');AU.res=j.results||[];
+  const m=$('#a_msg');if(m)m.textContent=j.running?`검수 중… ${j.done}/${j.total}`:(j.total?`검수 완료 (${j.started.replace('T',' ').slice(5,16)} 시작) · ${j.total}개`:'');
+  if($('#a_run'))$('#a_run').disabled=j.running;renderAudit();if(j.running)AU.timer=setTimeout(auditPoll,2500)}
+function auditIssues(r){const t=(r.title_checks||[]).map(c=>({lv:c.level,msg:c.msg,kind:'상품명'}));
+  (r.detail?.issues||[]).forEach(x=>t.push({lv:/비어|깨진|열지/.test(x)?'error':'warn',msg:x,kind:'상세'}));
+  if(r.ai?.verdict==='fix')t.push({lv:'warn',msg:'AI: '+r.ai.reason,kind:'AI',sug:r.ai.suggestion});return t}
+function renderAudit(){const box=$('#atable'),fb=$('#a_filter');if(!box)return;const rows=AU.res.map(r=>({...r,iss:auditIssues(r)}));
+  const nErr=rows.filter(r=>r.iss.some(i=>i.lv==='error')).length,nWarn=rows.filter(r=>r.iss.length&&!r.iss.some(i=>i.lv==='error')).length,nOk=rows.filter(r=>!r.iss.length).length;
+  fb.innerHTML=rows.length?`<span class="lbl">보기</span>${[['issue',`문제 있는 상품 ${nErr+nWarn}`],['error',`⛔ 바로 고칠 것 ${nErr}`],['ok',`✓ 통과 ${nOk}`],['all',`전체 ${rows.length}`]].map(([k,l])=>`<button class="chip pill ${AU.f===k?'on':''}" onclick="AU.f='${k}';renderAudit()">${l}</button>`).join('')}`:'';
+  const list=rows.filter(r=>AU.f==='all'||(AU.f==='ok'?!r.iss.length:AU.f==='error'?r.iss.some(i=>i.lv==='error'):r.iss.length));
+  box.innerHTML=!rows.length?'':table(list,[{k:'item_code',h:'상품번호',f:(v,r)=>`<a href="${r.link}" target="_blank">${esc(v)}</a>`},{k:'title',h:'상품명',t:1},{k:'qty',h:'재고',r:1,f:v=>`<span class="${v>0?'':'red'}">${nf(v)}</span>`},
+   {k:'detail',h:'상세',r:1,f:d=>d?`${d.imgs}장 · ${d.mb}MB ${d.url?`<a href="${d.url}" target="_blank">열기</a>`:''}`:'-'},
+   {k:'iss',h:'검수 결과',f:iss=>iss.length?iss.map(i=>`<div class="hint ${i.lv==='error'?'red':'orange'}" style="white-space:normal">${i.lv==='error'?'⛔':'⚠'} [${i.kind}] ${esc(i.msg)}${i.sug?`<br>→ <b>${esc(i.sug)}</b>`:''}</div>`).join(''):'<span class="tag green">통과</span>'}],
+   `상품명·재고·상세 이미지 점검 · 고칠 상품은 ✎ 상품 수정에서 바로 고칠 수 있어요`)}
+
+window.saveRules=async()=>{const keys=['title_template','base_keywords','required_words','banned_words','max_title','base_krw','base_jpy','fx','category','brand','shipping','contact','opt_qty','single_qty','prefix','detail_mb_warn','mall_detail_url'];
   const b={};keys.forEach(k=>{const v=$('#s_'+k).value;b[k]=/^(max_title|base_krw|base_jpy|fx|opt_qty|single_qty|detail_mb_warn)$/.test(k)?+v:v});
   try{await postJ('/api/settings',b);$('#s_msg').innerHTML='<b class="green">저장했어요</b>'}catch(e){$('#s_msg').textContent='실패: '+e.message}};
 function qPrepFolder(files){const items=groupFolder(files);return items.map(it=>{const det=it.all.filter(x=>x.rel.length>1&&/^(상세|detail)/i.test(x.rel[0]));
@@ -442,7 +467,15 @@ function renderQCard(){const box=$('#qcard');const it=Q.items[Q.open];if(!box)re
     ${d.opt.rows.map((r,k)=>`<div class="optrow" style="grid-template-columns:1fr ${two?'1fr ':''}110px"><input data-qv="${k}" value="${esc(r.value)}">${two?`<input data-qv2="${k}" value="${esc(r.value2||'')}">`:''}<input data-qp="${k}" type="number" value="${r.price||0}" title="추가금(엔)"></div>`).join('')}</div>
    <div class="grid2" style="margin-top:10px"><div><label class="desc">썸네일 · 추가이미지 ${it.gal.length}장</label><div class="thumbs">${it.thumb?`<div><img src="${it.thumbURL}"></div>`:''}${it.gal.slice(0,12).map(g=>`<div><img src="${g.url||(g.url=URL.createObjectURL(g.f))}"></div>`).join('')}</div></div>
     <div><label class="desc">상세 미리보기 (글자만)</label><div class="preview" style="max-height:220px;font-size:12px">${esc((it.htmlPreview||'').slice(0,800))}</div></div></div>
-   <div style="margin-top:12px"><button class="btn pri" onclick="qSave(true)">확인 완료</button> <button class="btn" onclick="qSave(false)">수정 내용만 저장</button></div></div>`}
+   <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn pri" onclick="qSave(true)">확인 완료</button> <button class="btn" onclick="qSave(false)">수정 내용만 저장</button>
+    <button class="chip" style="border-color:var(--blue);color:var(--blue)" onclick="qReview()">✦ 상품명 검수 (규칙 + AI)</button></div><div id="qc_review"></div></div>`}
+window.qReview=async()=>{const t=$('#qc_title').value,pr=$('#qc_promo').value,box=$('#qc_review');box.innerHTML='<div class="desc" style="margin-top:8px">검수 중…</div>';
+  try{const j=await postJ('/api/title/check',{items:[{title:t,promo:pr}],ai:true});box.innerHTML=reviewHTML(j.results[0],'qc_title')}catch(e){box.innerHTML=`<div class="result ng">${esc(e.message)}</div>`}};
+function reviewHTML(r,target){const cs=r.checks||[],ai=r.ai;const ok=!cs.length&&(!ai||ai.verdict==='ok');
+  return `<div class="result ${cs.some(c=>c.level==='error')||ai?.verdict==='fix'?'ng':'ok'}" style="margin-top:8px">${ok?'<b>문제 없어요</b>':''}
+   ${cs.map(c=>`<div>${c.level==='error'?'⛔':'⚠'} ${esc(c.msg)}</div>`).join('')}
+   ${ai&&ai.verdict==='fix'?`<div>✦ AI: ${esc(ai.reason)}</div>${ai.suggestion?`<div style="margin-top:4px">제안: <b>${esc(ai.suggestion)}</b> ${target?`<a class="chip" onclick="$('#${target}').value=${esc(JSON.stringify(ai.suggestion))};this.textContent='적용됨'">적용</a>`:''}</div>`:''}`:''}
+   ${ai&&ai.verdict==='error'?`<div>AI 검수 실패: ${esc(ai.reason)}</div>`:''}</div>`}
 window.qSave=ok=>{const it=Q.items[Q.open],d=it.draft;d.title=$('#qc_title').value;d.promo=$('#qc_promo').value;d.price=+$('#qc_price').value;d.retail=+$('#qc_retail').value||0;
   d.keywords=$('#qc_kw').value.split(',').map(x=>x.trim()).filter(Boolean);document.querySelectorAll('[data-qv]').forEach(e=>d.opt.rows[+e.dataset.qv].value=e.value);
   document.querySelectorAll('[data-qv2]').forEach(e=>d.opt.rows[+e.dataset.qv2].value2=e.value);document.querySelectorAll('[data-qp]').forEach(e=>d.opt.rows[+e.dataset.qp].price=+e.value||0);
@@ -466,7 +499,7 @@ window.qRegister=async()=>{const list=Q.items.filter(i=>i.ok&&i.draft&&!i.status
     it.status='등록 중';renderQ();const sc=`${R.prefix}${d.no}`;const rows=d.opt.rows.map((r,k)=>({...r,qty:R.opt_qty,code:`${sc}-${k+1}`}));
     const params={SecondSubCat:R.category,BrandNo:R.brand,ShippingNo:R.shipping,ContactInfo:R.contact,ProductionPlaceType:'2',ProductionPlace:'KR',AvailableDateType:'0',AvailableDateValue:'3',AdultYN:'N',
      ItemTitle:d.title,PromotionName:d.promo,Keyword:d.keywords.join(','),SellerCode:sc,ItemPrice:d.price,RetailPrice:d.retail||'',ItemQty:rows.length?rows.length*R.opt_qty:R.single_qty,StandardImage:it.thumbUrl,ItemDescription:html};
-    const j=await postJ('/api/items/register',{params,confirm:true,gallery:it.galUrls,options:rows.length?{name:d.opt.name,name2:d.opt.name2,rows}:{}});
+    const j=await regPost({params,confirm:true,gallery:it.galUrls,options:rows.length?{name:d.opt.name,name2:d.opt.name2,rows}:{}},d.no);
     const sub=[j.gallery,j.options].filter(x=>x&&String(x.ResultCode)!=='0');it.status=j.ok?(sub.length?`✅ ${j.gd_no} (일부 실패: ${sub.map(x=>x.ResultMsg).join(', ')})`:`✅ ${j.gd_no}`):`❌ ${j.message}`}
    catch(e){it.status='❌ '+e.message}renderQ()}
   $('#q_reg').disabled=false;$('#q_rmsg').textContent=`등록 완료 ${list.filter(i=>i.status.startsWith('✅')).length}/${list.length}`};
@@ -474,7 +507,7 @@ const X={items:[],prices:null,cfg:{src:'mall',krw:17900,jpy:2400,cbase:2400,oqty
 const CC={'中国':'CN','韓国':'KR','日本':'JP'};
 function readX(){const g=id=>$('#'+id)?.value;if(!$('#x_krw'))return;X.cfg={src:g('x_src'),krw:+g('x_krw'),jpy:+g('x_jpy'),cbase:+g('x_cbase'),oqty:+g('x_oqty'),sqty:+g('x_sqty'),ship:g('x_ship'),prefix:g('x_prefix')};
   document.querySelectorAll('[data-xc]').forEach(e=>{X.items[+e.dataset.xc].on=e.checked});document.querySelectorAll('[data-xm]').forEach(e=>{X.items[+e.dataset.xm].mode=e.value});
-  document.querySelectorAll('[data-xp]').forEach(e=>{X.items[+e.dataset.xp].price=+e.value});document.querySelectorAll('[data-xcode]').forEach(e=>{X.items[+e.dataset.xcode].qoo_code=e.value.trim()})}
+  document.querySelectorAll('[data-xp]').forEach(e=>{X.items[+e.dataset.xp].price=+e.value});document.querySelectorAll('[data-xt]').forEach(e=>{X.items[+e.dataset.xt].title=e.value});document.querySelectorAll('[data-xcode]').forEach(e=>{X.items[+e.dataset.xcode].qoo_code=e.value.trim()})}
 window.xPrice=async(refresh)=>{readX();try{X.prices=(await api(`/api/mall/prices${refresh?'?refresh=true':''}`));$('#x_pmsg').textContent=`자사몰 가격: ${X.prices.source}`}catch(e){$('#x_pmsg').textContent='자사몰 가격 실패: '+e.message;return}
   const P=X.prices.prices,ratio=X.cfg.jpy/X.cfg.krw,J=k=>Math.round(k*ratio/10)*10,fx=X.prices.fx;
   X.items.forEach(it=>{it.warn=[];
@@ -492,12 +525,17 @@ function renderX(){const t=$('#xtable');if(!t)return;if(!X.items.length){t.inner
   ${X.items.map((it,i)=>`<tr><td><input type="checkbox" data-xc="${i}" ${it.on!==false?'checked':''}></td><td>${it.kind}</td>
    <td><select data-xm="${i}" style="font:inherit;font-size:12px"><option value="new" ${it.mode==='new'?'selected':''}>신규 등록</option><option value="update" ${it.mode==='update'?'selected':''}>기존 수정</option></select>
     ${it.mode==='update'?`<input data-xcode="${i}" value="${esc(it.qoo_code)}" placeholder="큐텐 상품번호" style="width:100px;font-size:12px">`:''}</td>
-   <td>${esc(it.no||'')}</td><td class="t" title="${esc(it.title)}">${esc(it.title)}</td>
+   <td>${esc(it.no||'')}</td><td style="min-width:320px"><input data-xt="${i}" value="${esc(it.title)}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px"></td>
    <td class="r"><input data-xp="${i}" type="number" value="${it.price||''}" style="width:72px;text-align:right;font-size:12px"></td><td class="r">${it.retail?won(it.retail):'-'}</td>
    <td class="r">${it.rows?.length||0}${it.rows?.length?`<details><summary class="hint">보기</summary><div class="hint" style="text-align:left;white-space:normal;min-width:260px">${it.rows.map(r=>`${esc(r.value)}${r.value2?' / '+esc(r.value2):''} <b>${r.price?'+'+r.price:'+0'}</b>${r.flag?` <span class="${r.flag==='상한'?'red':'orange'}">${r.flag}</span>`:''}`).join('<br>')}</div></details>`:''}</td>
    <td class="r">${it.gallery.length}</td><td>${it.desc?'✓':'<span class="red">없음</span>'}</td>
-   <td style="white-space:normal;min-width:180px">${it.result?`<span class="tag ${tag(it.result)}">${esc(it.result)}</span>`:''}${(it.warn||[]).map(w=>`<div class="hint orange">⚠ ${esc(w)}</div>`).join('')}</td></tr>`).join('')}</tbody></table></div>`;
+   <td style="white-space:normal;min-width:220px">${it.result?`<span class="tag ${tag(it.result)}">${esc(it.result)}</span>`:''}${it.review?`${it.review.checks.map(c=>`<div class="hint ${c.level==='error'?'red':'orange'}">${c.level==='error'?'⛔':'⚠'} ${esc(c.msg)}</div>`).join('')}${it.review.ai?.verdict==='fix'?`<div class="hint">✦ ${esc(it.review.ai.reason)}<br>→ <b>${esc(it.review.ai.suggestion||'')}</b> ${it.review.ai.suggestion?`<a class="chip" onclick="xApply(${i})">적용</a>`:''}</div>`:''}${!it.review.checks.length&&it.review.ai?.verdict==='ok'?'<div class="hint green">✓ 검수 통과</div>':''}`:''}${(it.warn||[]).map(w=>`<div class="hint orange">⚠ ${esc(w)}</div>`).join('')}</td></tr>`).join('')}</tbody></table></div>`;
   t.querySelectorAll('[data-xm]').forEach(e=>e.onchange=()=>{readX();renderX()})}
+window.xCheck=async()=>{readX();const b=$('#x_chk');b.disabled=true;$('#x_rmsg').textContent=`${X.items.length}개 상품명 검수 중… (1분 정도)`;
+  try{const j=await postJ('/api/title/check',{items:X.items.map(i=>({title:i.title,promo:i.promo,code:i.mode==='update'?i.qoo_code:''})),ai:true});
+   j.results.forEach((r,k)=>{X.items[k].review=r});const nErr=j.results.filter(r=>r.checks.some(c=>c.level==='error')).length,nFix=j.results.filter(r=>r.ai?.verdict==='fix').length;
+   $('#x_rmsg').textContent=`검수 완료 · 규칙 위반 ${nErr}개 · AI 수정 제안 ${nFix}개 (표의 확인/결과 칸)`;renderX()}catch(e){$('#x_rmsg').textContent='검수 실패: '+e.message}b.disabled=false};
+window.xApply=(i)=>{const it=X.items[i];if(it.review?.ai?.suggestion){it.title=it.review.ai.suggestion;it.review=null;renderX()}};
 window.xRun=async()=>{readX();const list=X.items.filter(i=>i.on!==false&&!String(i.result||'').startsWith('✅'));if(!list.length){alert('실행할 상품이 없어요');return}
   const bad=list.filter(i=>!i.desc||!i.price||(i.mode==='update'&&!i.qoo_code));if(bad.length){alert(`확인이 필요한 상품이 ${bad.length}개 있어요 (상세 없음/가격 없음/상품번호 없음). 체크를 빼거나 채운 뒤 실행해 주세요.\n${bad.map(b=>b.no||b.kr_name).join(', ')}`);return}
   const nNew=list.filter(i=>i.mode==='new').length,nUp=list.length-nNew;
@@ -510,7 +548,7 @@ window.xRun=async()=>{readX();const list=X.items.filter(i=>i.on!==false&&!String
    const basic={SecondSubCat:it.category,ShippingNo:X.cfg.ship,ProductionPlaceType:'2',ProductionPlace:CC[origin]||'KR',AvailableDateType:'0',AvailableDateValue:'3',AdultYN:'N',
      ItemTitle:it.title,PromotionName:it.promo,BrandNo:it.brand,Material:it.material,Keyword:it.keywords.join(','),RetailPrice:it.retail||''};
    try{let j;
-    if(it.mode==='new'){j=await postJ('/api/items/register',{params:{...basic,SellerCode:sc,ItemPrice:it.price,ItemQty:qty,StandardImage:it.main,ItemDescription:it.desc},confirm:true,gallery:it.gallery,options:optPayload});
+    if(it.mode==='new'){j=await regPost({params:{...basic,SellerCode:sc,ItemPrice:it.price,ItemQty:qty,StandardImage:it.main,ItemDescription:it.desc},confirm:true,gallery:it.gallery,options:optPayload},it.no||it.kr_name);
      const sub=[j.gallery,j.options].filter(x=>x&&String(x.ResultCode)!=='0');it.result=j.ok?(sub.length?`✅ ${j.gd_no} (일부 실패: ${sub.map(x=>x.ResultMsg).join(', ')})`:`✅ ${j.gd_no}`):`❌ ${j.message}`}
     else{j=await postJ(`/api/items/${it.qoo_code}/update`,{seller_code:'',basic,price_qty:{price:it.price,qty},image:it.main,description:it.desc,gallery:it.gallery,options:optPayload});
      const ng=Object.entries(j.steps).filter(([,x])=>String(x.ResultCode)!=='0');it.result=ng.length?`❌ 일부 실패: ${ng.map(([k,x])=>k+' '+(x.ResultMsg||'')).join(', ')}`:`✅ 수정 완료 ${it.qoo_code}`}}
@@ -552,6 +590,8 @@ function renderB(){const t=$('#btable');if(!t)return;if(!B.items.length){t.inner
    <td style="white-space:normal;min-width:160px"><span class="tag ${tag(it.status)}">${esc(it.status)}</span>${it.opts&&it.opts.length?`<details><summary class="hint">옵션·추가금</summary><div class="hint">${it.opts.map(o=>`${esc(o.value)} ${o.add>=0?'+':''}${o.add}엔${o.kr_name?` (${esc(o.kr_name)})`:' <b class="red">매칭 없음</b>'}${o.over_cap?' <b class="red">상한</b>':''}${o.confidence==='low'?' <b class="orange">확인</b>':''}`).join('<br>')}</div></details>`:''}</td></tr>`).join('')}</tbody></table></div>`;
   t.querySelectorAll('[data-bt]').forEach(e=>e.oninput=()=>{B.items[+e.dataset.bt].title=e.value});t.querySelectorAll('[data-bc]').forEach(e=>e.onchange=()=>{B.items[+e.dataset.bc].on=e.checked})}
 async function upFile(file){const fd=new FormData();fd.append('file',file,file.name);const r=await fetch('/api/images',{method:'POST',body:fd});const j=await r.json();if(!r.ok)throw new Error(j.detail);return j.url}
+async function regPost(body,label){try{return await postJ('/api/items/register',body)}catch(e){
+  if(/상품명 검수/.test(e.message)&&confirm(`${label||''}\n${e.message}\n\n그래도 이 상품명으로 등록할까요? (브랜드 이미지 확인 필수)`)){body.params._force=1;return await postJ('/api/items/register',body)}throw e}}
 const postJ=async(u,b)=>{const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});const j=await r.json();if(!r.ok)throw new Error(j.detail||r.status);return j};
 async function prepOne(it){const set=s=>{it.status=s;renderB()};
   if(!it.thumb)throw new Error('썸네일 없음');if(!it.html)throw new Error('상세 HTML 없음');
@@ -582,7 +622,7 @@ window.batchRegister=async(skipConfirm)=>{readB();const list=B.items.filter(i=>i
    const params={SecondSubCat:t.SecondSubCat,ShippingNo:t.ShippingNo,ProductionPlaceType:t.ProductionPlaceType,ProductionPlace:t.ProductionPlaceType==='2'?t.ProductionPlace:'',
     AvailableDateType:'0',AvailableDateValue:t.AvailableDateValue,AdultYN:'N',ItemTitle:it.title,PromotionName:it.promo||'',SellerCode:sc,
     ItemPrice:it.price,RetailPrice:it.retail||'',ItemQty:rows.length?rows.length*B.cfg.oqty:B.cfg.sqty,StandardImage:it.thumbUrl,ItemDescription:it.htmlText};
-   try{const j=await postJ('/api/items/register',{params,confirm:true,gallery:it.galUrls,options:rows.length?{name:it.oname,rows}:{}});
+   try{const j=await regPost({params,confirm:true,gallery:it.galUrls,options:rows.length?{name:it.oname,rows}:{}},it.name);
     const sub=[j.gallery,j.options].filter(x=>x&&String(x.ResultCode)!=='0');
     it.status=j.ok?(sub.length?`✅ ${j.gd_no} (일부 실패: ${sub.map(x=>x.ResultMsg).join(', ')})`:`✅ ${j.gd_no}`):`❌ ${j.message}`}
    catch(e){it.status='❌ '+e.message}renderB()}
@@ -648,10 +688,11 @@ async function cloneFrom(code){if(!code)return;$('#cloneRaw').textContent='불�
   catch(e){$('#cloneRaw').textContent='불러오기 실패: '+e.message}refreshR()}
 window.doRegister=async()=>{const p=buildParams(),b=$('#regBtn');if(!$('#confirm').checked){alert('최종 확인에 체크해 주세요');return}
   b.disabled=true;b.textContent='등록 중…';
-  try{const r=await fetch('/api/items/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({params:p,confirm:true,gallery:R.gallery,options:invPayload()})});const j=await r.json();
+  try{let j,rok=true;try{j=await regPost({params:p,confirm:true,gallery:R.gallery,options:invPayload()})}catch(e){rok=false;j={detail:e.message}}const r={ok:rok};
    $('#regResult').innerHTML=!r.ok?`<div class="result ng">등록 전 확인 필요: ${esc(j.detail)}</div>`:j.ok?`<div class="result ok"><b>등록 성공</b> — 상품번호 ${esc(j.gd_no)}. QSM에서 노출 상태를 확인해 주세요.</div>${(j.gallery||j.options)?stepResult(j):''}`:`<div class="result ng"><b>큐텐이 거절했어요</b>: ${esc(j.message)}<details><summary>원본 응답</summary><pre style="white-space:pre-wrap">${esc(JSON.stringify(j.raw,null,1))}</pre></details></div>`}
   catch(e){$('#regResult').innerHTML=`<div class="result ng">${esc(e.message)}</div>`}b.disabled=false;b.textContent='큐텐에 등록하기'};
-function bindRegister(){if(st.page==='quick'){renderQ();$('#q_dir').onchange=e=>{Q.items=qPrepFolder(e.target.files);Q.open=-1;renderQ();$('#q_msg').textContent=`${Q.items.length}개 상품 폴더를 찾았어요`};return}
+function bindRegister(){if(st.page==='audit'){auditPoll();return}
+  if(st.page==='quick'){renderQ();$('#q_dir').onchange=e=>{Q.items=qPrepFolder(e.target.files);Q.open=-1;renderQ();$('#q_msg').textContent=`${Q.items.length}개 상품 폴더를 찾았어요`};return}
   if(st.page==='sheet'){renderX();
     $('#x_file').onchange=async e=>{const fd=new FormData();fd.append('file',e.target.files[0]);$('#x_msg').textContent='읽는 중…';
       try{const r=await fetch('/api/sheet/parse',{method:'POST',body:fd});const j=await r.json();if(!r.ok)throw new Error(j.detail);X.items=j.items.map(i=>({...i,on:true}));$('#x_msg').textContent=`단품 ${X.items.filter(i=>i.kind==='단품').length}개 · 모음전 ${X.items.filter(i=>i.kind==='모음전').length}개를 읽었어요`;await xPrice()}
